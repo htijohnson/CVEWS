@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CVEWS Live Telemetry Control Room</title>
+    <title>CVEWS Sandbox Telemetry Control Room</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js" type="text/javascript"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -40,10 +40,10 @@
 <body>
 
 <div class="dashboard-container">
-    <header><h1>CVEWS SECURE TELEMETRY</h1></header>
+    <header><h1>CVEWS PUBLIC SANDBOX TELEMETRY</h1></header>
 
     <div class="alarm-zone">
-        <div id="alarmBanner" class="alarm-banner">CONNECTING TO PRIVATE CLUSTER...</div>
+        <div id="alarmBanner" class="alarm-banner">CONNECTING TO HIVEMQ SANDBOX...</div>
     </div>
 
     <div class="section-title">Process Instrumentation (4-20mA Loops)</div>
@@ -83,75 +83,24 @@
 </div>
 
 <script>
-    // --- Secure Private HiveMQ Cloud Broker Configuration ---
-    const MQTT_HOST = "91edf0b43131429b9a2d60d852310ada.s1.eu.hivemq.cloud"; 
-    const MQTT_PORT = 8884; // Secure WebSockets Port for Web Browsers
-    const MQTT_USER = "CVEWSDash";
-    const MQTT_PASS = "Water123";
+    // --- HiveMQ Public Sandbox Target Settings ---
+    const MQTT_HOST = "broker.hivemq.com"; 
+    const MQTT_PORT = 8014; // Public SECURE WebSocket port (compatible with HTTPS GitHub Pages)
     const MQTT_TOPIC = "CVEWS/telemetry/live";
 
-    // Initialize Encrypted Client Profile via secure connection string (wss://)
-    const client = new Paho.MQTT.Client("wss://" + MQTT_HOST + ":" + MQTT_PORT + "/mqtt", "CVEWS_WebClient_" + Math.random().toString(16).substr(2, 8));
+    // Initialize encrypted secure client string (wss://) using port 8014
+    const client = new Paho.MQTT.Client("wss://" + MQTT_HOST + ":" + MQTT_PORT + "/mqtt", "CVEWS_SandboxWeb_" + Math.random().toString(16).substr(2, 8));
 
     client.onConnectionLost = (responseObject) => {
         document.getElementById("alarmBanner").className = "alarm-banner";
-        document.getElementById("alarmBanner").innerText = "⚠️ SECURE DISCONNECT - RECONNECTING...";
+        document.getElementById("alarmBanner").innerText = "⚠️ CONNECT ROOM DROPPED - RECONNECTING...";
         setTimeout(connectBroker, 3000);
     };
 
     client.onMessageArrived = (message) => {
         try {
-            // Unpack securely transmitted payload
+            // Unpack incoming sandbox telemetry string transmitted from Wokwi
             const data = JSON.parse(message.payloadString);
 
-            // Update Metrics & Progress Bars
-            document.getElementById("valSmall").innerHTML = Math.round(data.tk_sm).toLocaleString() + ' <span style="font-size: 16px; color:#a0aec0;">GAL</span>';
-            document.getElementById("barSmall").style.width = ((data.tk_sm / 4100) * 100) + "%";
-
-            document.getElementById("valLarge").innerHTML = Math.round(data.tk_lg).toLocaleString() + ' <span style="font-size: 16px; color:#a0aec0;">GAL</span>';
-            document.getElementById("barLarge").style.width = ((data.tk_lg / 71000) * 100) + "%";
-
-            document.getElementById("valFlow").innerHTML = data.flow.toFixed(1) + ' <span style="font-size: 16px; color:#a0aec0;">GPM</span>';
-            document.getElementById("barFlow").style.width = ((data.flow / 100) * 100) + "%";
-
-            document.getElementById("valCl2").innerHTML = data.cl2.toFixed(2) + ' <span style="font-size: 16px; color:#a0aec0;">mg/L</span>';
-            document.getElementById("barCl2").style.width = ((data.cl2 / 5.0) * 100) + "%";
-
-            // Update Digital Badges
-            toggleBadge("badgeW1", data.w1, "active-green", "Running", "Offline");
-            toggleBadge("badgeW3", data.w3, "active-green", "Running", "Offline");
-            toggleBadge("badgeW4", data.w4, "active-green", "Running", "Offline");
-            toggleBadge("badgeW5", data.w5, "active-green", "Running", "Offline");
-            toggleBadge("badgeP1", data.p1, "active-blue", "Active", "Idle");
-            toggleBadge("badgeP2", data.p2, "active-blue", "Active", "Idle");
-            toggleBadge("badgeAlm", data.alm, "active-red", "Tripped", "Clear");
-
-            // Update Status Banner
-            const banner = document.getElementById("alarmBanner");
-            if (data.alm) {
-                banner.className = "alarm-banner alarm-active";
-                banner.innerText = "⚠️ SYSTEM ALARM ACTIVE ⚠️";
-            } else {
-                banner.className = "alarm-banner alarm-normal";
-                banner.innerText = "SYSTEM STATUS: SECURE & OK";
-            }
-        } catch(e) { console.error("Data mapping fault.", e); }
-    };
-
-    function toggleBadge(id, isActive, activeClass, activeText, idleText) {
-        const badge = document.getElementById(id);
-        const textNode = badge.querySelector(".badge-status-text");
-        if (isActive) {
-            badge.className = "status-badge " + activeClass;
-            textNode.innerText = activeText;
-        } else {
-            badge.className = "status-badge";
-            textNode.innerText = idleText;
-        }
-    }
-
-    function connectBroker() {
-        client.connect({
-            onSuccess: () => {
-                document.getElementById("alarmBanner").className = "alarm-banner alarm-normal";
-                document.
+            // Update Fluid Metrics
+            document.getElementById("valSmall").innerHTML = Math.round(data.tk_sm).toLocaleString() + ' <span style="font
