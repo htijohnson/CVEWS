@@ -3,304 +3,168 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Telemetry Control Room Dashboard</title>
+    <title>Live Telemetry Control Room</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js" type="text/javascript"></script>
     <style>
-        * {
-            box-sizing: border-box;
-            margin: 0;
-            padding: 0;
-        }
-        body {
-            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
-            background-color: #1a1e24;
-            color: #e2e8f0;
-            padding: 20px;
-            min-height: 100vh;
-        }
-        .dashboard-container {
-            max-width: 1200px;
-            margin: 0 auto;
-        }
-        header {
-            text-align: center;
-            margin-bottom: 30px;
-            padding-bottom: 15px;
-            border-bottom: 2px solid #2d3748;
-        }
-        header h1 {
-            font-size: 24px;
-            letter-spacing: 1px;
-            color: #edf2f7;
-        }
-        
-        /* 1. Centered Alarm Indicator Zone */
-        .alarm-zone {
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            margin-bottom: 40px;
-        }
-        .alarm-banner {
-            width: 100%;
-            max-width: 600px;
-            padding: 20px;
-            border-radius: 8px;
-            text-align: center;
-            font-weight: bold;
-            font-size: 22px;
-            letter-spacing: 2px;
-            /* Example state: Triggered/Active */
-            background-color: #742a2a;
-            border: 2px solid #e53e3e;
-            color: #fff5f5;
-            box-shadow: 0 0 15px rgba(229, 62, 62, 0.4);
-            animation: pulse 2s infinite;
-        }
-        /* Example helper class for Normal state */
-        .alarm-banner.normal {
-            background-color: #1c4532;
-            border: 2px solid #38a169;
-            color: #f0fff4;
-            box-shadow: none;
-            animation: none;
-        }
-
-        /* 2. Sensor Readings Section (Middle Rows) */
-        .section-title {
-            font-size: 18px;
-            color: #a0aec0;
-            margin-bottom: 15px;
-            text-transform: uppercase;
-            letter-spacing: 1px;
-            border-left: 4px solid #4299e1;
-            padding-left: 10px;
-        }
-        .sensor-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(240px, 1fr));
-            gap: 20px;
-            margin-bottom: 40px;
-        }
-        .sensor-card {
-            background-color: #232934;
-            border: 1px solid #2d3748;
-            border-radius: 8px;
-            padding: 20px;
-            position: relative;
-            overflow: hidden;
-        }
-        .sensor-label {
-            font-size: 14px;
-            color: #a0aec0;
-            margin-bottom: 10px;
-        }
-        .sensor-value {
-            font-size: 32px;
-            font-weight: bold;
-            color: #63b3ed;
-            font-family: monospace;
-            margin-bottom: 15px;
-        }
-        /* Visual fill bars to simulate industrial process levels */
-        .progress-container {
-            background-color: #2d3748;
-            border-radius: 4px;
-            height: 12px;
-            width: 100%;
-            overflow: hidden;
-        }
-        .progress-bar {
-            height: 100%;
-            background-color: #3182ce;
-            transition: width 0.5s ease-in-out;
-        }
-        .tank-1-fill { width: 65%; background-color: #3182ce; }
-        .tank-2-fill { width: 82%; background-color: #31ac87; }
-        .flow-fill { width: 45%; background-color: #dd6b20; }
-        .cl-fill { width: 24%; background-color: #b7791f; }
-
-        /* 3. 120V Digital Indicators Section (Bottom Row) */
-        .indicator-grid {
-            display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-            gap: 15px;
-        }
-        .status-badge {
-            background-color: #232934;
-            border: 1px solid #2d3748;
-            border-radius: 6px;
-            padding: 15px 10px;
-            text-align: center;
-            transition: all 0.3s ease;
-        }
-        .badge-name {
-            font-size: 13px;
-            color: #cbd5e0;
-            margin-bottom: 8px;
-            font-weight: 500;
-        }
-        .light-indicator {
-            width: 16px;
-            height: 16px;
-            border-radius: 50%;
-            margin: 0 auto 5px auto;
-            background-color: #4a5568; /* Default / Off state */
-            box-shadow: inset 0 2px 4px rgba(0,0,0,0.4);
-        }
-        /* State Modifiers for Active 120V Inputs */
-        .status-badge.active-green .light-indicator {
-            background-color: #48bb78;
-            box-shadow: 0 0 10px #48bb78, inset 0 1px 2px rgba(255,255,255,0.5);
-        }
-        .status-badge.active-blue .light-indicator {
-            background-color: #4299e1;
-            box-shadow: 0 0 10px #4299e1, inset 0 1px 2px rgba(255,255,255,0.5);
-        }
-        .badge-status-text {
-            font-size: 11px;
-            text-transform: uppercase;
-            font-weight: bold;
-            color: #718096;
-        }
-        .status-badge.active-green .badge-status-text { color: #48bb78; }
-        .status-badge.active-blue .badge-status-text { color: #4299e1; }
-
-        @keyframes pulse {
-            0% { transform: scale(1); box-shadow: 0 0 15px rgba(229, 62, 62, 0.4); }
-            50% { transform: scale(1.01); box-shadow: 0 0 25px rgba(229, 62, 62, 0.7); }
-            100% { transform: scale(1); box-shadow: 0 0 15px rgba(229, 62, 62, 0.4); }
-        }
-
-        @media (max-width: 768px) {
-            body { padding: 10px; }
-            .sensor-grid { grid-template-columns: 1fr; }
-            .indicator-grid { grid-template-columns: repeat(2, 1fr); }
-        }
+        * { box-sizing: border-box; margin: 0; padding: 0; }
+        body { font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif; background-color: #1a1e24; color: #e2e8f0; padding: 20px; min-height: 100vh; }
+        .dashboard-container { max-width: 1200px; margin: 0 auto; }
+        header { text-align: center; margin-bottom: 30px; padding-bottom: 15px; border-bottom: 2px solid #2d3748; }
+        header h1 { font-size: 24px; letter-spacing: 1px; color: #edf2f7; }
+        .alarm-zone { display: flex; justify-content: center; align-items: center; margin-bottom: 40px; }
+        .alarm-banner { width: 100%; max-width: 600px; padding: 20px; border-radius: 8px; text-align: center; font-weight: bold; font-size: 22px; letter-spacing: 2px; transition: all 0.3s; background-color: #2d3748; border: 2px solid #4a5568; }
+        .alarm-active { background-color: #742a2a; border: 2px solid #e53e3e; color: #fff5f5; box-shadow: 0 0 15px rgba(229, 62, 62, 0.4); animation: pulse 2s infinite; }
+        .alarm-normal { background-color: #1c4532; border: 2px solid #38a169; color: #f0fff4; }
+        .section-title { font-size: 18px; color: #a0aec0; margin-bottom: 15px; text-transform: uppercase; letter-spacing: 1px; border-left: 4px solid #4299e1; padding-left: 10px; }
+        .sensor-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(240px, 1fr)); gap: 20px; margin-bottom: 40px; }
+        .sensor-card { background-color: #232934; border: 1px solid #2d3748; border-radius: 8px; padding: 20px; position: relative; overflow: hidden; }
+        .sensor-label { font-size: 14px; color: #a0aec0; margin-bottom: 10px; }
+        .sensor-value { font-size: 32px; font-weight: bold; color: #63b3ed; font-family: monospace; margin-bottom: 15px; }
+        .progress-container { background-color: #2d3748; border-radius: 4px; height: 12px; width: 100%; overflow: hidden; }
+        .progress-bar { height: 100%; width: 0%; transition: width 0.4s ease; }
+        .indicator-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 15px; }
+        .status-badge { background-color: #232934; border: 1px solid #2d3748; border-radius: 6px; padding: 15px 10px; text-align: center; transition: all 0.3s ease; }
+        .badge-name { font-size: 13px; color: #cbd5e0; margin-bottom: 8px; font-weight: 500; }
+        .light-indicator { width: 16px; height: 16px; border-radius: 50%; margin: 0 auto 5px auto; background-color: #4a5568; box-shadow: inset 0 2px 4px rgba(0,0,0,0.4); }
+        .badge-status-text { font-size: 11px; text-transform: uppercase; font-weight: bold; color: #718096; }
+        .active-green .light-indicator { background-color: #48bb78; box-shadow: 0 0 10px #48bb78; }
+        .active-green .badge-status-text { color: #48bb78; }
+        .active-blue .light-indicator { background-color: #4299e1; box-shadow: 0 0 10px #4299e1; }
+        .active-blue .badge-status-text { color: #4299e1; }
+        .active-red .light-indicator { background-color: #e53e3e; box-shadow: 0 0 10px #e53e3e; }
+        .active-red .badge-status-text { color: #e53e3e; }
+        @keyframes pulse { 0% { transform: scale(1); } 50% { transform: scale(1.02); } 100% { transform: scale(1); } }
+        @media (max-width: 768px) { .sensor-grid { grid-template-columns: 1fr; } .indicator-grid { grid-template-columns: repeat(2, 1fr); } }
     </style>
 </head>
 <body>
 
-    <div class="dashboard-container">
-        <header>
-            <h1>SYSTEM TELEMETRY DASHBOARD</h1>
-        </header>
+<div class="dashboard-container">
+    <header><h1>SYSTEM TELEMETRY DASHBOARD</h1></header>
 
-        <!-- ZONE 1: CENTERED SYSTEM ALARM INDICATOR -->
-        <div class="alarm-zone">
-            <!-- Dynamic State Tip: Swap class to "alarm-banner normal" and change text to "SYSTEM STATUS: OK" for clean run state -->
-            <div class="alarm-banner">
-                ⚠️ SYSTEM ALARM ACTIVE ⚠️
-            </div>
+    <div class="alarm-zone">
+        <div id="alarmBanner" class="alarm-banner">CONNECTING TO BROKER...</div>
+    </div>
+
+    <div class="section-title">Process Instrumentation (4-20mA Loops)</div>
+    <div class="sensor-grid">
+        <div class="sensor-card">
+            <div class="sensor-label">Small Tank Level</div>
+            <div id="valSmall" class="sensor-value">-- <span style="font-size: 16px; color:#a0aec0;">GAL</span></div>
+            <div class="progress-container"><div id="barSmall" class="progress-bar" style="background-color:#3182ce;"></div></div>
         </div>
-
-        <!-- ZONE 2: 4-20mA SENSOR READINGS (MIDDLE SECTION) -->
-        <div class="section-title">Process Instrumentation (4-20mA Loops)</div>
-        <div class="sensor-grid">
-            
-            <!-- Small Tank -->
-            <div class="sensor-card">
-                <div class="sensor-label">Small Tank Level</div>
-                <div class="sensor-value">2,665 <span style="font-size: 16px; color:#a0aec0;">GAL</span></div>
-                <div class="progress-container">
-                    <div class="progress-bar tank-1-fill"></div>
-                </div>
-                <div style="font-size: 11px; color:#718096; margin-top: 5px; text-align: right;">Scale: 0 - 4.1k Gal</div>
-            </div>
-
-            <!-- Large Tank -->
-            <div class="sensor-card">
-                <div class="sensor-label">Large Tank Level</div>
-                <div class="sensor-value">58,220 <span style="font-size: 16px; color:#a0aec0;">GAL</span></div>
-                <div class="progress-container">
-                    <div class="progress-bar tank-2-fill"></div>
-                </div>
-                <div style="font-size: 11px; color:#718096; margin-top: 5px; text-align: right;">Scale: 0 - 71k Gal</div>
-            </div>
-
-            <!-- Flow Meter -->
-            <div class="sensor-card">
-                <div class="sensor-label">TUF-2000B Flow Rate</div>
-                <div class="sensor-value">45.2 <span style="font-size: 16px; color:#a0aec0;">GPM</span></div>
-                <div class="progress-container">
-                    <div class="progress-bar flow-fill"></div>
-                </div>
-                <div style="font-size: 11px; color:#718096; margin-top: 5px; text-align: right;">Dynamic Scaling Mod</div>
-            </div>
-
-            <!-- Chlorine Analyzer -->
-            <div class="sensor-card">
-                <div class="sensor-label">CL-17 Chlorine Content</div>
-                <div class="sensor-value">1.20 <span style="font-size: 16px; color:#a0aec0;">mg/L</span></div>
-                <div class="progress-container">
-                    <div class="progress-bar cl-fill"></div>
-                </div>
-                <div style="font-size: 11px; color:#718096; margin-top: 5px; text-align: right;">Scale: 0 - 5.00 PPM</div>
-            </div>
-
+        <div class="sensor-card">
+            <div class="sensor-label">Large Tank Level</div>
+            <div id="valLarge" class="sensor-value">-- <span style="font-size: 16px; color:#a0aec0;">GAL</span></div>
+            <div class="progress-container"><div id="barLarge" class="progress-bar" style="background-color:#31ac87;"></div></div>
         </div>
-
-        <!-- ZONE 3: 120V ISOLATED DIGITAL INDICATORS (BOTTOM SECTION) -->
-        <div class="section-title">Relay Monitoring Interfaces (120V AC Input Status)</div>
-        <div class="indicator-grid">
-            
-            <!-- Well 1 -->
-            <div class="status-badge active-green">
-                <div class="light-indicator"></div>
-                <div class="badge-name">Well 1</div>
-                <div class="badge-status-text">Running</div>
-            </div>
-
-            <!-- Well 3 -->
-            <div class="status-badge">
-                <div class="light-indicator"></div>
-                <div class="badge-name">Well 3</div>
-                <div class="badge-status-text">Offline</div>
-            </div>
-
-            <!-- Well 4 -->
-            <div class="status-badge active-green">
-                <div class="light-indicator"></div>
-                <div class="badge-name">Well 4</div>
-                <div class="badge-status-text">Running</div>
-            </div>
-
-            <!-- Well 5 -->
-            <div class="status-badge">
-                <div class="light-indicator"></div>
-                <div class="badge-name">Well 5</div>
-                <div class="badge-status-text">Offline</div>
-            </div>
-
-            <!-- Pump 1 -->
-            <div class="status-badge active-blue">
-                <div class="light-indicator"></div>
-                <div class="badge-name">Pump 1</div>
-                <div class="badge-status-text">Active</div>
-            </div>
-
-            <!-- Pump 2 -->
-            <div class="status-badge">
-                <div class="light-indicator"></div>
-                <div class="badge-name">Pump 2</div>
-                <div class="badge-status-text">Idle</div>
-            </div>
-
-            <!-- Alarm Light -->
-            <div class="status-badge" style="border-color: #e53e3e;">
-                <div class="light-indicator" style="background-color: #e53e3e; box-shadow: 0 0 10px #e53e3e;"></div>
-                <div class="badge-name" style="color: #fc8181;">Alarm Light</div>
-                <div class="badge-status-text" style="color: #e53e3e;">Tripped</div>
-            </div>
-
-            <!-- Spare 8 -->
-            <div class="status-badge" style="opacity: 0.4;">
-                <div class="light-indicator"></div>
-                <div class="badge-name">Aux Input 8</div>
-                <div class="badge-status-text">Unmapped</div>
-            </div>
-
+        <div class="sensor-card">
+            <div class="sensor-label">TUF-2000B Flow Rate</div>
+            <div id="valFlow" class="sensor-value">-- <span style="font-size: 16px; color:#a0aec0;">GPM</span></div>
+            <div class="progress-container"><div id="barFlow" class="progress-bar" style="background-color:#dd6b20;"></div></div>
+        </div>
+        <div class="sensor-card">
+            <div class="sensor-label">CL-17 Chlorine Content</div>
+            <div id="valCl2" class="sensor-value">-- <span style="font-size: 16px; color:#a0aec0;">mg/L</span></div>
+            <div class="progress-container"><div id="barCl2" class="progress-bar" style="background-color:#b7791f;"></div></div>
         </div>
     </div>
 
+    <div class="section-title">Relay Monitoring Interfaces (120V AC Input Status)</div>
+    <div class="indicator-grid">
+        <div id="badgeW1" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Well 1</div><div class="badge-status-text">Offline</div></div>
+        <div id="badgeW3" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Well 3</div><div class="badge-status-text">Offline</div></div>
+        <div id="badgeW4" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Well 4</div><div class="badge-status-text">Offline</div></div>
+        <div id="badgeW5" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Well 5</div><div class="badge-status-text">Offline</div></div>
+        <div id="badgeP1" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Pump 1</div><div class="badge-status-text">Idle</div></div>
+        <div id="badgeP2" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Pump 2</div><div class="badge-status-text">Idle</div></div>
+        <div id="badgeAlm" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Alarm Light</div><div class="badge-status-text">Clear</div></div>
+    </div>
+</div>
+
+<script>
+    // --- INSERT YOUR HIVEMQ INSTANCE INFORMATION HERE ---
+    const MQTT_HOST = "PASTE_YOUR_HIVEMQ_CLUSTER_URL_HERE"; 
+    const MQTT_PORT = 8884; // Secure WebSockets Port
+    const MQTT_USER = "web_dashboard";
+    const MQTT_PASS = "PASTE_YOUR_WEB_PASSWORD_HERE";
+    const MQTT_TOPIC = "facility/telemetry/live";
+
+    // Initialize Paho MQTT client
+    const client = new Paho.MQTT.Client("wss://" + MQTT_HOST + ":" + MQTT_PORT + "/mqtt", "WebDashboardClient_" + Math.random().toString(16).substr(2, 8));
+
+    client.onConnectionLost = (responseObject) => {
+        document.getElementById("alarmBanner").className = "alarm-banner";
+        document.getElementById("alarmBanner").innerText = "⚠️ CONNECTION LOST - RETRYING...";
+        setTimeout(connectBroker, 3000);
+    };
+
+    client.onMessageArrived = (message) => {
+        try {
+            // Parse incoming dense JSON data packet from the ESP32
+            const data = JSON.parse(message.payloadString);
+
+            // Update 4-20mA Readings & Visual Fluid Progress Bars
+            document.getElementById("valSmall").innerHTML = Math.round(data.tk_sm).toLocaleString() + ' <span style="font-size: 16px; color:#a0aec0;">GAL</span>';
+            document.getElementById("barSmall").style.width = ((data.tk_sm / 4100) * 100) + "%";
+
+            document.getElementById("valLarge").innerHTML = Math.round(data.tk_lg).toLocaleString() + ' <span style="font-size: 16px; color:#a0aec0;">GAL</span>';
+            document.getElementById("barLarge").style.width = ((data.tk_lg / 71000) * 100) + "%";
+
+            document.getElementById("valFlow").innerHTML = data.flow.toFixed(1) + ' <span style="font-size: 16px; color:#a0aec0;">GPM</span>';
+            document.getElementById("barFlow").style.width = ((data.flow / 100) * 100) + "%"; // Assumes 100 GPM max scale
+
+            document.getElementById("valCl2").innerHTML = data.cl2.toFixed(2) + ' <span style="font-size: 16px; color:#a0aec0;">mg/L</span>';
+            document.getElementById("barCl2").style.width = ((data.cl2 / 5.0) * 100) + "%"; // Assumes 5.00 PPM max scale
+
+            // Update 120V Relay Grid Badges
+            toggleBadge("badgeW1", data.w1, "active-green", "Running", "Offline");
+            toggleBadge("badgeW3", data.w3, "active-green", "Running", "Offline");
+            toggleBadge("badgeW4", data.w4, "active-green", "Running", "Offline");
+            toggleBadge("badgeW5", data.w5, "active-green", "Running", "Offline");
+            toggleBadge("badgeP1", data.p1, "active-blue", "Active", "Idle");
+            toggleBadge("badgeP2", data.p2, "active-blue", "Active", "Idle");
+            toggleBadge("badgeAlm", data.alm, "active-red", "Tripped", "Clear");
+
+            // Update Centered Global Alarm Banner State
+            const banner = document.getElementById("alarmBanner");
+            if (data.alm) {
+                banner.className = "alarm-banner alarm-active";
+                banner.innerText = "⚠️ SYSTEM ALARM ACTIVE ⚠️";
+            } else {
+                banner.className = "alarm-banner alarm-normal";
+                banner.innerText = "SYSTEM STATUS: OK";
+            }
+        } catch(e) { console.error("Malformed telemetry packet received.", e); }
+    };
+
+    function toggleBadge(id, isActive, activeClass, activeText, idleText) {
+        const badge = document.getElementById(id);
+        const textNode = badge.querySelector(".badge-status-text");
+        if (isActive) {
+            badge.className = "status-badge " + activeClass;
+            textNode.innerText = activeText;
+        } else {
+            badge.className = "status-badge";
+            textNode.innerText = idleText;
+        }
+    }
+
+    function connectBroker() {
+        client.connect({
+            onSuccess: () => {
+                document.getElementById("alarmBanner").className = "alarm-banner alarm-normal";
+                document.getElementById("alarmBanner").innerText = "CONNECTED - WAITING FOR DATA...";
+                client.subscribe(MQTT_TOPIC);
+            },
+            onFailure: (err) => { setTimeout(connectBroker, 5000); },
+            userName: MQTT_USER,
+            password: MQTT_PASS,
+            useSSL: true
+        });
+    }
+
+    connectBroker();
+</script>
 </body>
 </html>
