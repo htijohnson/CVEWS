@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Live Telemetry Control Room</title>
+    <title>CVEWS Live Telemetry Control Room</title>
     <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js" type="text/javascript"></script>
     <style>
         * { box-sizing: border-box; margin: 0; padding: 0; }
@@ -40,10 +40,10 @@
 <body>
 
 <div class="dashboard-container">
-    <header><h1>SYSTEM TELEMETRY DASHBOARD</h1></header>
+    <header><h1>CVEWS SYSTEM TELEMETRY</h1></header>
 
     <div class="alarm-zone">
-        <div id="alarmBanner" class="alarm-banner">CONNECTING TO BROKER...</div>
+        <div id="alarmBanner" class="alarm-banner">CONNECTING TO HIVEMQ SANDBOX...</div>
     </div>
 
     <div class="section-title">Process Instrumentation (4-20mA Loops)</div>
@@ -83,28 +83,26 @@
 </div>
 
 <script>
-    // --- INSERT YOUR HIVEMQ INSTANCE INFORMATION HERE ---
-    const MQTT_HOST = "broker.hivemq.cloud"; 
-    const MQTT_PORT = 8000; // Secure WebSockets Port
-    const MQTT_USER = "CVEWSDash";
-    const MQTT_PASS = "Water123";
-    const MQTT_TOPIC = "facility/telemetry/live";
+    // --- HiveMQ Public Sandbox Target Settings ---
+    const MQTT_HOST = "broker.hivemq.com"; 
+    const MQTT_PORT = 8000; // Public unencrypted WebSocket pipeline
+    const MQTT_TOPIC = "CVEWS/telemetry/live";
 
-    // Initialize Paho MQTT client
-    const client = new Paho.MQTT.Client("wss://" + MQTT_HOST + ":" + MQTT_PORT + "/mqtt", "WebDashboardClient_" + Math.random().toString(16).substr(2, 8));
+    // Initialize unencrypted standard WS configuration profile
+    const client = new Paho.MQTT.Client("ws://" + MQTT_HOST + ":" + MQTT_PORT + "/mqtt", "CVEWS_WebClient_" + Math.random().toString(16).substr(2, 8));
 
     client.onConnectionLost = (responseObject) => {
         document.getElementById("alarmBanner").className = "alarm-banner";
-        document.getElementById("alarmBanner").innerText = "⚠️ CONNECTION LOST - RETRYING...";
+        document.getElementById("alarmBanner").innerText = "⚠️ CONNECT ROOM DROPPED - RECONNECTING...";
         setTimeout(connectBroker, 3000);
     };
 
     client.onMessageArrived = (message) => {
         try {
-            // Parse incoming dense JSON data packet from the ESP32
+            // Unpack incoming telemetry string transmitted from Wokwi
             const data = JSON.parse(message.payloadString);
 
-            // Update 4-20mA Readings & Visual Fluid Progress Bars
+            // Update Fluid Metrics
             document.getElementById("valSmall").innerHTML = Math.round(data.tk_sm).toLocaleString() + ' <span style="font-size: 16px; color:#a0aec0;">GAL</span>';
             document.getElementById("barSmall").style.width = ((data.tk_sm / 4100) * 100) + "%";
 
@@ -112,12 +110,12 @@
             document.getElementById("barLarge").style.width = ((data.tk_lg / 71000) * 100) + "%";
 
             document.getElementById("valFlow").innerHTML = data.flow.toFixed(1) + ' <span style="font-size: 16px; color:#a0aec0;">GPM</span>';
-            document.getElementById("barFlow").style.width = ((data.flow / 100) * 100) + "%"; // Assumes 100 GPM max scale
+            document.getElementById("barFlow").style.width = ((data.flow / 100) * 100) + "%";
 
             document.getElementById("valCl2").innerHTML = data.cl2.toFixed(2) + ' <span style="font-size: 16px; color:#a0aec0;">mg/L</span>';
-            document.getElementById("barCl2").style.width = ((data.cl2 / 5.0) * 100) + "%"; // Assumes 5.00 PPM max scale
+            document.getElementById("barCl2").style.width = ((data.cl2 / 5.0) * 100) + "%";
 
-            // Update 120V Relay Grid Badges
+            // Update Digital Relay States
             toggleBadge("badgeW1", data.w1, "active-green", "Running", "Offline");
             toggleBadge("badgeW3", data.w3, "active-green", "Running", "Offline");
             toggleBadge("badgeW4", data.w4, "active-green", "Running", "Offline");
@@ -126,7 +124,7 @@
             toggleBadge("badgeP2", data.p2, "active-blue", "Active", "Idle");
             toggleBadge("badgeAlm", data.alm, "active-red", "Tripped", "Clear");
 
-            // Update Centered Global Alarm Banner State
+            // Evaluate System Status Bar State
             const banner = document.getElementById("alarmBanner");
             if (data.alm) {
                 banner.className = "alarm-banner alarm-active";
@@ -135,7 +133,7 @@
                 banner.className = "alarm-banner alarm-normal";
                 banner.innerText = "SYSTEM STATUS: OK";
             }
-        } catch(e) { console.error("Malformed telemetry packet received.", e); }
+        } catch(e) { console.error("Data mapping fault.", e); }
     };
 
     function toggleBadge(id, isActive, activeClass, activeText, idleText) {
@@ -154,13 +152,11 @@
         client.connect({
             onSuccess: () => {
                 document.getElementById("alarmBanner").className = "alarm-banner alarm-normal";
-                document.getElementById("alarmBanner").innerText = "CONNECTED - WAITING FOR DATA...";
+                document.getElementById("alarmBanner").innerText = "ONLINE - LINKED TO CVEWS STREAM";
                 client.subscribe(MQTT_TOPIC);
             },
             onFailure: (err) => { setTimeout(connectBroker, 5000); },
-            userName: MQTT_USER,
-            password: MQTT_PASS,
-            useSSL: false
+            useSSL: false // Bypasses mixed-content constraints in sandbox test environment
         });
     }
 
