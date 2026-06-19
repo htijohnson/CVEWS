@@ -97,7 +97,7 @@
         document.getElementById("alarmBanner").innerText = `CONNECTING VIA PORT ${port}...`;
 
         // Generate instance
-        client = new Paho.MQTT.Client("wss://" + MQTT_HOST + ":" + port + "/mqtt", "CVEWS_Sbx_" + Math.random().toString(16).substr(2, 8));
+        const client = new Paho.MQTT.Client("wss://" + MQTT_HOST + ":" + MQTT_PORT + "/mqtt", "CVEWS_WebSecure_" + Math.random().toString(16).substr(2, 8));
 
         client.onConnectionLost = (responseObject) => {
             console.log("Connection lost. Retrying standard loop.");
