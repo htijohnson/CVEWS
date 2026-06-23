@@ -148,4 +148,123 @@
 
         <div class="card">
             <div class="card-title">System Flow Rate</div>
-            <div class="
+            <div class="huge-value"><span id="val-flow">0.0</span> <span class="unit">GPM</span></div>
+            <div class="gauge-container">
+                <div id="gauge-flow" class="gauge-bar" style="background-color: #a855f7;"></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Chlorine Residual</div>
+            <div class="huge-value"><span id="val-cl2">0.00</span> <span class="unit">PPM</span></div>
+            <div class="gauge-container">
+                <div id="gauge-cl2" class="gauge-bar" style="background-color: #eab308;"></div>
+            </div>
+        </div>
+    </div>
+
+    <div class="grid">
+        <div class="card">
+            <div class="card-title">Well Plant Control Status</div>
+            <div class="status-list">
+                <div class="status-item"><span>Well 1</span> <span id="state-w1" class="badge idle">OFF</span></div>
+                <div class="status-item"><span>Well 3</span> <span id="state-w3" class="badge idle">OFF</span></div>
+                <div class="status-item"><span>Well 4</span> <span id="state-w4" class="badge idle">OFF</span></div>
+                <div class="status-item"><span>Well 5</span> <span id="state-w5" class="badge idle">OFF</span></div>
+            </div>
+        </div>
+
+        <div class="card">
+            <div class="card-title">Booster Pump Status</div>
+            <div class="status-list">
+                <div class="status-item"><span>Pump 1</span> <span id="state-p1" class="badge idle">OFF</span></div>
+                <div class="status-item"><span>Pump 2</span> <span id="state-p2" class="badge idle">OFF</span></div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    // 🛠️ CONFIGURATION: Paste your Google Web App URL endpoint here to read the raw data row
+    const DATA_API_URL = "https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec";
+
+    // Tank Total Volumes for Calculating Percentages accurately
+    const MAX_SMALL_TANK = 5000;
+    const MAX_LARGE_TANK = 15000;
+    const MAX_FLOW_SCALE = 100; // Max GPM for visual bar max mapping
+    const MAX_CL2_SCALE  = 5.0; // Max Chlorine PPM for visual bar max mapping
+
+    async function fetchLatestTelemetry() {
+        try {
+            const response = await fetch(DATA_API_URL);
+            const data = await response.json();
+            
+            // Assuming your backend API sends back an array or object containing the latest columns
+            updateDashboard(data);
+        } catch (error) {
+            console.error("Failed parsing real-time instrumentation payload:", error);
+        }
+    }
+
+    function updateDashboard(data) {
+        // Update Timestamps
+        document.getElementById('time-label').innerText = data.timestamp || "Just Now";
+
+        // Update Numbers
+        document.getElementById('val-tk-sm').innerText = data.tk_sm;
+        document.getElementById('val-tk-lg').innerText = data.tk_lg;
+        document.getElementById('val-flow').innerText = parseFloat(data.flow).toFixed(1);
+        document.getElementById('val-cl2').innerText = parseFloat(data.cl2).toFixed(2);
+
+        // Update Gauge Bars (Percentages)
+        const pctSm = Math.min((data.tk_sm / MAX_SMALL_TANK) * 100, 100);
+        const pctLg = Math.min((data.tk_lg / MAX_LARGE_TANK) * 100, 100);
+        const pctFlow = Math.min((data.flow / MAX_FLOW_SCALE) * 100, 100);
+        const pctCl2 = Math.min((data.cl2 / MAX_CL2_SCALE) * 100, 100);
+
+        document.getElementById('gauge-tk-sm').style.width = pctSm + "%";
+        document.getElementById('gauge-tk-lg').style.width = pctLg + "%";
+        document.getElementById('gauge-flow').style.width = pctFlow + "%";
+        document.getElementById('gauge-cl2').style.width = pctCl2 + "%";
+
+        // Dynamic Color Changes based on tank critical emptiness (less than 20%)
+        document.getElementById('gauge-tk-sm').style.backgroundColor = pctSm < 20 ? '#f87171' : '#38bdf8';
+        document.getElementById('gauge-tk-lg').style.backgroundColor = pctLg < 20 ? '#f87171' : '#38bdf8';
+
+        // Master Alarm State Indicator Banner Top Left
+        const alarmBadge = document.getElementById('system-state-badge');
+        if (data.alm === "TRIPPED") {
+            alarmBadge.innerText = "🚨 SYSTEM TRIPPED ALARM";
+            alarmBadge.className = "badge tripped";
+        } else {
+            alarmBadge.innerText = "✅ SYSTEM OPERATIONAL";
+            alarmBadge.className = "badge clear";
+        }
+
+        // Digital Grid Mappings Helper function (Switches to ON/OFF states)
+        const setToggleState = (elementId, value) => {
+            const el = document.getElementById(elementId);
+            const stateText = String(value).toUpperCase().trim();
+            if (stateText === "1" || stateText === "ON" || stateText === "RUNNING") {
+                el.innerText = "RUNNING";
+                el.className = "badge active";
+            } else {
+                el.innerText = "IDLE";
+                el.className = "badge idle";
+            }
+        };
+
+        setToggleState('state-w1', data.w1);
+        setToggleState('state-w3', data.w3);
+        setToggleState('state-w4', data.w4);
+        setToggleState('state-w5', data.w5);
+        setToggleState('state-p1', data.p1);
+        setToggleState('state-p2', data.p2);
+    }
+
+    // Auto-refresh every 30 seconds
+    fetchLatestTelemetry();
+    setInterval(fetchLatestTelemetry, 30000);
+</script>
+</body>
+</html>
