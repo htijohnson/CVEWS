@@ -148,10 +148,10 @@
 
     <div class="section-title">Relay Monitoring Interfaces (120V AC Input Status)</div>
     <div class="indicator-grid">
-        <div id="badgeW1" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Well 1</div><div class="badge-status-text">Offline</div></div>
-        <div id="badgeW3" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Well 3</div><div class="badge-status-text">Offline</div></div>
-        <div id="badgeW4" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Well 4</div><div class="badge-status-text">Offline</div></div>
-        <div id="badgeW5" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Well 5</div><div class="badge-status-text">Offline</div></div>
+        <div id="badgeW1" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Well 1</div><div class="badge-status-text">Not Running</div></div>
+        <div id="badgeW3" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Well 3</div><div class="badge-status-text">Not Running</div></div>
+        <div id="badgeW4" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Well 4</div><div class="badge-status-text">Not Running</div></div>
+        <div id="badgeW5" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Well 5</div><div class="badge-status-text">Not Running</div></div>
         <div id="badgeP1" class="status-badge"><div class="light-indicator"></div><div class="badge-name">7.5hp Booster</div><div class="badge-status-text">Idle</div></div>
         <div id="badgeP2" class="status-badge"><div class="light-indicator"></div><div class="badge-name">5hp Boster</div><div class="badge-status-text">Idle</div></div>
         <div id="badgeAlm" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Alarm Light</div><div class="badge-status-text">Clear</div></div>
@@ -265,10 +265,10 @@ if (data.cl2 > 1.00 || data.cl2 === 0.00) {
             }
 
             // 5. Update Digital Relay States
-            toggleBadge("badgeW1", data.w1, "active-green", "Running", "Offline");
-            toggleBadge("badgeW3", data.w3, "active-green", "Running", "Offline");
-            toggleBadge("badgeW4", data.w4, "active-green", "Running", "Offline");
-            toggleBadge("badgeW5", data.w5, "active-green", "Running", "Offline");
+            toggleBadge("badgeW1", data.w1, "active-green", "Running", "Not Running");
+            toggleBadge("badgeW3", data.w3, "active-green", "Running", "Not Running");
+            toggleBadge("badgeW4", data.w4, "active-green", "Running", "Not Running");
+            toggleBadge("badgeW5", data.w5, "active-green", "Running", "Not Running");
             toggleBadge("badgeP1", data.p1, "active-blue", "Active", "Idle");
             toggleBadge("badgeP2", data.p2, "active-blue", "Active", "Idle");
             toggleBadge("badgeAlm", data.alm, "active-red", "Tripped", "Clear");
