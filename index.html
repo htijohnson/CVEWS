@@ -34,7 +34,7 @@
         .warning-low-2_3 { border: 1px solid #d69e2e; box-shadow: 0 0 12px rgba(214, 158, 46, 0.2); animation: flash-yellow-slow 3s infinite; }
         .warning-critical-1_3 { border: 1px solid #e53e3e; box-shadow: 0 0 15px rgba(229, 62, 62, 0.4); animation: flash-red-fast 1s infinite; }
 
-        /* Retro 7-Segment/LCD Volumetric Displays */
+        /* Retro 7-Segment/LCD Look */
         .lcd-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; margin-bottom: 40px; }
         .lcd-card { background-color: #0f1115; border: 3px solid #2d3748; border-radius: 6px; padding: 15px; box-shadow: inset 0 0 10px rgba(0,0,0,0.8); }
         .lcd-display { background-color: #101a14; border: 2px solid #050806; border-radius: 4px; padding: 10px; text-align: right; box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); }
@@ -133,7 +133,9 @@
     const MQTT_USER = "CVEWSDash"; 
     const MQTT_PASS = "Water123";  
     const MQTT_TOPIC = "CVEWS/telemetry/live";
-    const GOOGLE_WEB_APP_URL = "https://script.google.com/macros/s/AKfycby0tMJYWzvQIr-bqjViqPL8Fs4qridwhoOxA5ZrIZUefblbCPiikQe7u7Zhk8N03dQ/exec";
+    
+    // ⚠️ TODO: Swap out this exact string with your current macro ID from Google Apps Script deployment panel
+    const GOOGLE_WEB_APP_URL = "https://script.google.com/macros/s/YOUR_NEW_DEPLOYMENT_ID/exec";
 
     const client = new Paho.MQTT.Client("wss://" + MQTT_HOST + ":" + MQTT_PORT + "/mqtt", "CVEWS_WebDash_" + Math.random().toString(16).substr(2, 8));
 
@@ -157,13 +159,13 @@
             const barSmall = document.getElementById("barSmall");
             if (pctSmall < 33.33) {
                 cardSmall.className = "sensor-card warning-critical-1_3";
-                barSmall.style.backgroundColor = "#e53e3e";
+                barSmall.style.backgroundColor = "#e53e3e"; 
             } else if (pctSmall < 66.66) {
                 cardSmall.className = "sensor-card warning-low-2_3";
-                barSmall.style.backgroundColor = "#d69e2e";
+                barSmall.style.backgroundColor = "#d69e2e"; 
             } else {
                 cardSmall.className = "sensor-card";
-                barSmall.style.backgroundColor = "#3182ce";
+                barSmall.style.backgroundColor = "#3182ce"; 
             }
 
             // 2. Process Large Tank Layout & Threshold Colors
@@ -176,13 +178,13 @@
             const barLarge = document.getElementById("barLarge");
             if (pctLarge < 33.33) {
                 cardLarge.className = "sensor-card warning-critical-1_3";
-                barLarge.style.backgroundColor = "#e53e3e";
+                barLarge.style.backgroundColor = "#e53e3e"; 
             } else if (pctLarge < 66.66) {
                 cardLarge.className = "sensor-card warning-low-2_3";
-                barLarge.style.backgroundColor = "#d69e2e";
+                barLarge.style.backgroundColor = "#d69e2e"; 
             } else {
                 cardLarge.className = "sensor-card";
-                barLarge.style.backgroundColor = "#31ac87";
+                barLarge.style.backgroundColor = "#31ac87"; 
             }
 
             // 3. Process Fluid Flow & Chlorine Content
@@ -203,7 +205,7 @@
 
             // Evaluate Main Control Room Banner Color
             const banner = document.getElementById("alarmBanner");
-            if (data.alm) {
+            if (data.alm || data.alm === "1" || data.alm === "TRIPPED") {
                 banner.className = "alarm-banner alarm-active";
                 banner.innerText = "⚠️ SYSTEM ALARM ACTIVE ⚠️";
             } else {
@@ -216,7 +218,7 @@
     function toggleBadge(id, isActive, activeClass, activeText, idleText) {
         const badge = document.getElementById(id);
         const textNode = badge.querySelector(".badge-status-text");
-        if (isActive) {
+        if (isActive === 1 || isActive === "1" || isActive === true || isActive === "Running" || isActive === "Active" || isActive === "Tripped") {
             badge.className = "status-badge " + activeClass;
             textNode.innerText = activeText;
         } else {
@@ -226,12 +228,15 @@
     }
 
     async function updateHistoricalLCDs() {
-        if (GOOGLE_WEB_APP_URL.includes("YOUR_NEW_DEPLOYMENT_ID")) return;
+        if (GOOGLE_WEB_APP_URL.includes("YOUR_NEW_DEPLOYMENT_ID")) {
+            console.warn("Totalizer LCD engine paused: Awaiting Google Macro ID integration key.");
+            return;
+        }
         try {
             const response = await fetch(GOOGLE_WEB_APP_URL);
             const totals = await response.json();
             
-            if(totals.error) return;
+            if (totals.error) return;
             document.getElementById("lcd1h").innerText = totals.pumped_1h.toLocaleString();
             document.getElementById("lcd6h").innerText = totals.pumped_6h.toLocaleString();
             document.getElementById("lcd12h").innerText = totals.pumped_12h.toLocaleString();
@@ -257,10 +262,10 @@
         });
     }
 
-    // Initialize both data feeds
+    // Fire operations
     connectBroker();
     updateHistoricalLCDs();
-    setInterval(updateHistoricalLCDs, 60000);
+    setInterval(updateHistoricalLCDs, 60000); // Check calculations every minute
 </script>
 </body>
 </html>
