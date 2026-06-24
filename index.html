@@ -3,7 +3,8 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>CVEWS Telemetry Dashboard</title>
+    <title>CVEWS Real-Time Telemetry</title>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js" type="text/javascript"></script>
     <style>
         :root {
             --bg-color: #121214;
@@ -16,18 +17,14 @@
         }
 
         body {
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
             background-color: var(--bg-color);
             color: var(--text-main);
             margin: 0;
             padding: 20px;
         }
 
-        .container {
-            max-width: 1000px;
-            margin: 0 auto;
-        }
-
+        .container { max-width: 1000px; margin: 0 auto; }
         header {
             display: flex;
             justify-content: space-between;
@@ -40,7 +37,6 @@
         h1 { margin: 0; font-size: 1.8rem; color: var(--primary); }
         .timestamp { color: var(--text-muted); font-size: 0.9rem; }
 
-        /* Dashboard Grid System */
         .grid {
             display: grid;
             grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
@@ -60,43 +56,30 @@
             color: var(--text-muted);
             text-transform: uppercase;
             letter-spacing: 0.05em;
-            margin-top: 0;
             margin-bottom: 15px;
         }
 
-        /* Large Data Numbers */
-        .huge-value {
-            font-size: 2.5rem;
-            font-weight: bold;
-            margin-bottom: 10px;
-        }
+        .huge-value { font-size: 2.5rem; font-weight: bold; margin-bottom: 10px; }
         .unit { font-size: 1.2rem; color: var(--text-muted); font-weight: normal; }
 
-        /* Visual Gauge / Progress Bar Styling */
+        /* Gauges */
         .gauge-container {
             background-color: #2d2d34;
             border-radius: 6px;
             height: 20px;
             width: 100%;
             overflow: hidden;
-            position: relative;
             margin-top: 8px;
         }
 
         .gauge-bar {
             background-color: var(--primary);
             height: 100%;
-            width: 0%; /* Dynamic allocation via JavaScript */
-            transition: width 0.5s ease-in-out, background-color 0.3s;
+            width: 0%;
+            transition: width 0.4s ease-in-out, background-color 0.3s;
         }
 
-        /* Status Grid Items for Switches (Wells/Pumps) */
-        .status-list {
-            display: grid;
-            grid-template-columns: repeat(2, 1fr);
-            gap: 12px;
-        }
-
+        .status-list { display: grid; grid-template-columns: repeat(2, 1fr); gap: 12px; }
         .status-item {
             background-color: #2d2d34;
             padding: 10px;
@@ -106,16 +89,12 @@
             align-items: center;
         }
 
-        .badge {
-            padding: 4px 8px;
-            border-radius: 4px;
-            font-size: 0.8rem;
-            font-weight: bold;
-        }
+        .badge { padding: 4px 8px; border-radius: 4px; font-size: 0.8rem; font-weight: bold; }
         .badge.active { background-color: #166534; color: #4ade80; }
         .badge.idle { background-color: #3f3f46; color: #d4d4d8; }
         .badge.tripped { background-color: #991b1b; color: #f87171; }
         .badge.clear { background-color: #166534; color: #4ade80; }
+        .badge.connecting { background-color: #854d0e; color: #fef08a; }
     </style>
 </head>
 <body>
@@ -123,43 +102,35 @@
 <div class="container">
     <header>
         <div>
-            <h1>CVEWS Telemetry Node</h1>
-            <div id="system-state-badge" class="badge idle" style="display:inline-block; margin-top:5px; font-size:0.9rem;">LOADING SYSTEM STATE...</div>
+            <h1>CVEWS Live Telemetry Node</h1>
+            <div id="system-state-badge" class="badge connecting" style="display:inline-block; margin-top:5px; font-size:0.9rem;">CONNECTING TO HIVEMQ...</div>
         </div>
-        <div class="timestamp">Last Update: <span id="time-label">--/-- --:--:--</span></div>
+        <div class="timestamp">Last Msg: <span id="time-label">--/-- --:--:--</span></div>
     </header>
 
     <div class="grid">
         <div class="card">
             <div class="card-title">Small Tank Level</div>
             <div class="huge-value"><span id="val-tk-sm">0</span> <span class="unit">/ 5000 Gal</span></div>
-            <div class="gauge-container">
-                <div id="gauge-tk-sm" class="gauge-bar"></div>
-            </div>
+            <div class="gauge-container"><div id="gauge-tk-sm" class="gauge-bar"></div></div>
         </div>
 
         <div class="card">
             <div class="card-title">Large Tank Level</div>
             <div class="huge-value"><span id="val-tk-lg">0</span> <span class="unit">/ 15000 Gal</span></div>
-            <div class="gauge-container">
-                <div id="gauge-tk-lg" class="gauge-bar"></div>
-            </div>
+            <div class="gauge-container"><div id="gauge-tk-lg" class="gauge-bar"></div></div>
         </div>
 
         <div class="card">
             <div class="card-title">System Flow Rate</div>
             <div class="huge-value"><span id="val-flow">0.0</span> <span class="unit">GPM</span></div>
-            <div class="gauge-container">
-                <div id="gauge-flow" class="gauge-bar" style="background-color: #a855f7;"></div>
-            </div>
+            <div class="gauge-container"><div id="gauge-flow" class="gauge-bar" style="background-color: #a855f7;"></div></div>
         </div>
 
         <div class="card">
             <div class="card-title">Chlorine Residual</div>
             <div class="huge-value"><span id="val-cl2">0.00</span> <span class="unit">PPM</span></div>
-            <div class="gauge-container">
-                <div id="gauge-cl2" class="gauge-bar" style="background-color: #eab308;"></div>
-            </div>
+            <div class="gauge-container"><div id="gauge-cl2" class="gauge-bar" style="background-color: #eab308;"></div></div>
         </div>
     </div>
 
@@ -185,38 +156,67 @@
 </div>
 
 <script>
-    // 🛠️ CONFIGURATION: Paste your Google Web App URL endpoint here to read the raw data row
-    const DATA_API_URL = "https://script.google.com/macros/s/YOUR_DEPLOYMENT_ID/exec";
+    // 🛠️ HIVEMQ WEBSOCKET CONFIGURATION
+    const MQTT_HOST = "YOUR_HIVEMQ_CLUSTER_URL.hivemq.cloud"; 
+    const MQTT_PORT = 8884; // Secure WebSockets port for HiveMQ Cloud
+    const MQTT_USER = "YOUR_MQTT_USERNAME";
+    const MQTT_PASS = "YOUR_MQTT_PASSWORD";
+    const MQTT_TOPIC = "cvews/telemetry"; // Change to your exact MQTT topic
 
-    // Tank Total Volumes for Calculating Percentages accurately
+    // Scales for gauges
     const MAX_SMALL_TANK = 5000;
     const MAX_LARGE_TANK = 15000;
-    const MAX_FLOW_SCALE = 100; // Max GPM for visual bar max mapping
-    const MAX_CL2_SCALE  = 5.0; // Max Chlorine PPM for visual bar max mapping
+    const MAX_FLOW_SCALE = 100;
+    const MAX_CL2_SCALE  = 5.0;
 
-    async function fetchLatestTelemetry() {
+    // Create a random Client ID to prevent connection collisions
+    const clientId = "cvews_dash_" + Math.random().toString(36).substring(2, 10);
+    const client = new Paho.MQTT.Client(MQTT_HOST, Number(MQTT_PORT), clientId);
+
+    client.onConnectionLost = (responseObject) => {
+        document.getElementById('system-state-badge').innerText = "⚠️ DISCONNECTED FROM BROKER";
+        document.getElementById('system-state-badge').className = "badge tripped";
+        setTimeout(connectMqtt, 5000); // Attempt auto-reconnect after 5 seconds
+    };
+
+    client.onMessageArrived = (message) => {
         try {
-            const response = await fetch(DATA_API_URL);
-            const data = await response.json();
-            
-            // Assuming your backend API sends back an array or object containing the latest columns
+            // Parse the incoming stringified JSON payload from the broker
+            const data = JSON.parse(message.payloadString);
             updateDashboard(data);
-        } catch (error) {
-            console.error("Failed parsing real-time instrumentation payload:", error);
+        } catch (e) {
+            console.error("Failed parsing MQTT JSON payload:", e);
         }
+    };
+
+    function connectMqtt() {
+        client.connect({
+            onSuccess: () => {
+                document.getElementById('system-state-badge').innerText = "✅ HIVEMQ CONNECTED";
+                document.getElementById('system-state-badge').className = "badge clear";
+                client.subscribe(MQTT_TOPIC);
+            },
+            onFailure: (err) => {
+                console.error("MQTT Connection failed:", err);
+                setTimeout(connectMqtt, 5000);
+            },
+            userName: MQTT_USER,
+            password: MQTT_PASS,
+            useSSL: true
+        });
     }
 
     function updateDashboard(data) {
-        // Update Timestamps
-        document.getElementById('time-label').innerText = data.timestamp || "Just Now";
+        // Update Time
+        const now = new Date();
+        document.getElementById('time-label').innerText = now.toLocaleTimeString();
 
-        // Update Numbers
+        // Update Gauges & Values
         document.getElementById('val-tk-sm').innerText = data.tk_sm;
         document.getElementById('val-tk-lg').innerText = data.tk_lg;
         document.getElementById('val-flow').innerText = parseFloat(data.flow).toFixed(1);
         document.getElementById('val-cl2').innerText = parseFloat(data.cl2).toFixed(2);
 
-        // Update Gauge Bars (Percentages)
         const pctSm = Math.min((data.tk_sm / MAX_SMALL_TANK) * 100, 100);
         const pctLg = Math.min((data.tk_lg / MAX_LARGE_TANK) * 100, 100);
         const pctFlow = Math.min((data.flow / MAX_FLOW_SCALE) * 100, 100);
@@ -227,25 +227,15 @@
         document.getElementById('gauge-flow').style.width = pctFlow + "%";
         document.getElementById('gauge-cl2').style.width = pctCl2 + "%";
 
-        // Dynamic Color Changes based on tank critical emptiness (less than 20%)
+        // Change bar colors dynamically based on tank emptiness
         document.getElementById('gauge-tk-sm').style.backgroundColor = pctSm < 20 ? '#f87171' : '#38bdf8';
         document.getElementById('gauge-tk-lg').style.backgroundColor = pctLg < 20 ? '#f87171' : '#38bdf8';
 
-        // Master Alarm State Indicator Banner Top Left
-        const alarmBadge = document.getElementById('system-state-badge');
-        if (data.alm === "TRIPPED") {
-            alarmBadge.innerText = "🚨 SYSTEM TRIPPED ALARM";
-            alarmBadge.className = "badge tripped";
-        } else {
-            alarmBadge.innerText = "✅ SYSTEM OPERATIONAL";
-            alarmBadge.className = "badge clear";
-        }
-
-        // Digital Grid Mappings Helper function (Switches to ON/OFF states)
+        // Digital Switches Helper
         const setToggleState = (elementId, value) => {
             const el = document.getElementById(elementId);
-            const stateText = String(value).toUpperCase().trim();
-            if (stateText === "1" || stateText === "ON" || stateText === "RUNNING") {
+            const state = String(value).toUpperCase().trim();
+            if (state === "1" || state === "ON" || state === "RUNNING") {
                 el.innerText = "RUNNING";
                 el.className = "badge active";
             } else {
@@ -262,9 +252,8 @@
         setToggleState('state-p2', data.p2);
     }
 
-    // Auto-refresh every 30 seconds
-    fetchLatestTelemetry();
-    setInterval(fetchLatestTelemetry, 30000);
+    // Initialize Connection
+    connectMqtt();
 </script>
 </body>
 </html>
