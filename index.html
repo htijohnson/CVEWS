@@ -158,7 +158,7 @@
     </div>
 </div>
 
-<script {timestamp="2026-06-24"}>
+<script>
     const MQTT_HOST = "91edf0b43131429b9a2d60d852310ada.s1.eu.hivemq.cloud"; 
     const MQTT_PORT = 8884;
     const MQTT_USER = "CVEWSDash"; 
@@ -241,27 +241,27 @@
             }
 
             // 4. CL-17 Chlorine Content Gauge Logic
-const maxCl2 = 2.0; // Scaled down max to 2.0 mg/L so 1.0 mg/L sits perfectly at 12 o'clock noon
-const pctCl2 = Math.min(Math.max((data.cl2 / maxCl2) * 100, 0), 100);
-document.getElementById("valCl2").innerHTML = data.cl2.toFixed(2) + ' <span style="font-size: 16px; color:#a0aec0;">mg/L</span>';
-const degCl2 = -180 + (pctCl2 * 1.8);
-document.getElementById("fillCl2").style.transform = `rotate(${degCl2}deg)`;
+            const maxCl2 = 2.0; // Scaled down max to 2.0 mg/L so 1.0 mg/L sits perfectly at 12 o'clock noon
+            const pctCl2 = Math.min(Math.max((data.cl2 / maxCl2) * 100, 0), 100);
+            document.getElementById("valCl2").innerHTML = data.cl2.toFixed(2) + ' <span style="font-size: 16px; color:#a0aec0;">mg/L</span>';
+            const degCl2 = -180 + (pctCl2 * 1.8);
+            document.getElementById("fillCl2").style.transform = `rotate(${degCl2}deg)`;
 
-const cardCl2 = document.getElementById("cardCl2");
-const fillCl2 = document.getElementById("fillCl2");
+            const cardCl2 = document.getElementById("cardCl2");
+            const fillCl2 = document.getElementById("fillCl2");
 
-if (data.cl2 > 1.00 || data.cl2 === 0.00) { 
-    // 🔴 Critical Red Alarm Zone (Over 1.00 or completely empty 0.00)
-    cardCl2.className = "sensor-card gauge-card warning-critical-1_3";
-    fillCl2.style.backgroundColor = "#e53e3e";
-} else if (data.cl2 > 0.00 && data.cl2 < 0.20) {
-    // 🟡 Warning Yellow Low Zone (Not quite empty, but below sweet spot)
-    cardCl2.className = "sensor-card gauge-card warning-low-2_3";
-    fillCl2.style.backgroundColor = "#d69e2e";
-} else {
-    // 🟢 Normal Green Operational Zone (0.20 mg/L to 1.00 mg/L)
-    cardCl2.className = "sensor-card gauge-card";
-    fillCl2.style.backgroundColor = "#38a169"; // Swapped out the old brown for a clean industrial green!
+            if (data.cl2 > 1.00 || data.cl2 === 0.00) { 
+                // 🔴 Critical Red Alarm Zone (Over 1.00 or completely empty 0.00)
+                cardCl2.className = "sensor-card gauge-card warning-critical-1_3";
+                fillCl2.style.backgroundColor = "#e53e3e";
+            } else if (data.cl2 > 0.00 && data.cl2 < 0.20) {
+                // 🟡 Warning Yellow Low Zone (Not quite empty, but below sweet spot)
+                cardCl2.className = "sensor-card gauge-card warning-low-2_3";
+                fillCl2.style.backgroundColor = "#d69e2e";
+            } else {
+                // 🟢 Normal Green Operational Zone (0.20 mg/L to 1.00 mg/L)
+                cardCl2.className = "sensor-card gauge-card";
+                fillCl2.style.backgroundColor = "#38a169"; // Swapped out the old brown for a clean industrial green!
             }
 
             // 5. Update Digital Relay States
@@ -303,6 +303,7 @@ if (data.cl2 > 1.00 || data.cl2 === 0.00) {
             const totals = await response.json();
             
             if (totals.error) return;
+            // Map totalizer payloads dynamically to the retro LCD card interfaces
             document.getElementById("lcd1h").innerText = totals.pumped_1h.toLocaleString();
             document.getElementById("lcd6h").innerText = totals.pumped_6h.toLocaleString();
             document.getElementById("lcd12h").innerText = totals.pumped_12h.toLocaleString();
