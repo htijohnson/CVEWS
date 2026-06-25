@@ -49,12 +49,13 @@
         .lcd-value { font-family: 'Orbitron', monospace; font-size: 28px; color: #39ff14; text-shadow: 0 0 6px rgba(57, 255, 20, 0.6); letter-spacing: 1px; }
         .lcd-unit { font-size: 11px; color: #4a5d4e; text-transform: uppercase; font-weight: bold; margin-top: 4px; }
 
-        .indicator-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); gap: 15px; }
+        .indicator-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; }
         .status-badge { background-color: #232934; border: 1px solid #2d3748; border-radius: 6px; padding: 15px 10px; text-align: center; transition: all 0.3s ease; }
         .badge-name { font-size: 13px; color: #cbd5e0; margin-bottom: 8px; font-weight: 500; }
         .light-indicator { width: 16px; height: 16px; border-radius: 50%; margin: 0 auto 5px auto; background-color: #4a5568; box-shadow: inset 0 2px 4px rgba(0,0,0,0.4); }
         .badge-status-text { font-size: 11px; text-transform: uppercase; font-weight: bold; color: #718096; }
-        
+        .badge-runtime { font-size: 11px; color: #94a3b8; margin-top: 6px; border-top: 1px dashed #334155; padding-top: 6px; }
+
         .active-green .light-indicator { background-color: #48bb78; box-shadow: 0 0 10px #48bb78; }
         .active-green .badge-status-text { color: #48bb78; }
         .active-blue .light-indicator { background-color: #4299e1; box-shadow: 0 0 10px #4299e1; }
@@ -148,13 +149,47 @@
 
     <div class="section-title">Relay Monitoring Interfaces (120V AC Input Status)</div>
     <div class="indicator-grid">
-        <div id="badgeW1" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Well 1</div><div class="badge-status-text">Not Running</div></div>
-        <div id="badgeW3" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Well 3</div><div class="badge-status-text">Not Running</div></div>
-        <div id="badgeW4" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Well 4</div><div class="badge-status-text">Not Running</div></div>
-        <div id="badgeW5" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Well 5</div><div class="badge-status-text">Not Running</div></div>
-        <div id="badgeP1" class="status-badge"><div class="light-indicator"></div><div class="badge-name">7.5hp Booster</div><div class="badge-status-text">Idle</div></div>
-        <div id="badgeP2" class="status-badge"><div class="light-indicator"></div><div class="badge-name">5hp Boster</div><div class="badge-status-text">Idle</div></div>
-        <div id="badgeAlm" class="status-badge"><div class="light-indicator"></div><div class="badge-name">Alarm Light</div><div class="badge-status-text">Clear</div></div>
+        <div id="badgeW1" class="status-badge">
+            <div class="light-indicator"></div>
+            <div class="badge-name">Well 1</div>
+            <div class="badge-status-text">Not Running</div>
+            <div class="badge-runtime">24H: <span id="runW1">--</span> hrs</div>
+        </div>
+        <div id="badgeW3" class="status-badge">
+            <div class="light-indicator"></div>
+            <div class="badge-name">Well 3</div>
+            <div class="badge-status-text">Not Running</div>
+            <div class="badge-runtime">24H: <span id="runW3">--</span> hrs</div>
+        </div>
+        <div id="badgeW4" class="status-badge">
+            <div class="light-indicator"></div>
+            <div class="badge-name">Well 4</div>
+            <div class="badge-status-text">Not Running</div>
+            <div class="badge-runtime">24H: <span id="runW4">--</span> hrs</div>
+        </div>
+        <div id="badgeW5" class="status-badge">
+            <div class="light-indicator"></div>
+            <div class="badge-name">Well 5</div>
+            <div class="badge-status-text">Not Running</div>
+            <div class="badge-runtime">24H: <span id="runW5">--</span> hrs</div>
+        </div>
+        <div id="badgeP1" class="status-badge">
+            <div class="light-indicator"></div>
+            <div class="badge-name">7.5hp Booster</div>
+            <div class="badge-status-text">Idle</div>
+            <div class="badge-runtime">24H: <span id="runP1">--</span> hrs</div>
+        </div>
+        <div id="badgeP2" class="status-badge">
+            <div class="light-indicator"></div>
+            <div class="badge-name">5hp Boster</div>
+            <div class="badge-status-text">Idle</div>
+            <div class="badge-runtime">24H: <span id="runP2">--</span> hrs</div>
+        </div>
+        <div id="badgeAlm" class="status-badge">
+            <div class="light-indicator"></div>
+            <div class="badge-name">Alarm Light</div>
+            <div class="badge-status-text">Clear</div>
+        </div>
     </div>
 </div>
 
@@ -241,7 +276,7 @@
             }
 
             // 4. CL-17 Chlorine Content Gauge Logic
-            const maxCl2 = 2.0; // Scaled down max to 2.0 mg/L so 1.0 mg/L sits perfectly at 12 o'clock noon
+            const maxCl2 = 2.0; 
             const pctCl2 = Math.min(Math.max((data.cl2 / maxCl2) * 100, 0), 100);
             document.getElementById("valCl2").innerHTML = data.cl2.toFixed(2) + ' <span style="font-size: 16px; color:#a0aec0;">mg/L</span>';
             const degCl2 = -180 + (pctCl2 * 1.8);
@@ -251,17 +286,14 @@
             const fillCl2 = document.getElementById("fillCl2");
 
             if (data.cl2 > 1.00 || data.cl2 === 0.00) { 
-                // 🔴 Critical Red Alarm Zone (Over 1.00 or completely empty 0.00)
                 cardCl2.className = "sensor-card gauge-card warning-critical-1_3";
                 fillCl2.style.backgroundColor = "#e53e3e";
             } else if (data.cl2 > 0.00 && data.cl2 < 0.20) {
-                // 🟡 Warning Yellow Low Zone (Not quite empty, but below sweet spot)
                 cardCl2.className = "sensor-card gauge-card warning-low-2_3";
                 fillCl2.style.backgroundColor = "#d69e2e";
             } else {
-                // 🟢 Normal Green Operational Zone (0.20 mg/L to 1.00 mg/L)
                 cardCl2.className = "sensor-card gauge-card";
-                fillCl2.style.backgroundColor = "#38a169"; // Swapped out the old brown for a clean industrial green!
+                fillCl2.style.backgroundColor = "#38a169"; 
             }
 
             // 5. Update Digital Relay States
@@ -303,11 +335,20 @@
             const totals = await response.json();
             
             if (totals.error) return;
+            
             // Map totalizer payloads dynamically to the retro LCD card interfaces
             document.getElementById("lcd1h").innerText = totals.pumped_1h.toLocaleString();
             document.getElementById("lcd6h").innerText = totals.pumped_6h.toLocaleString();
             document.getElementById("lcd12h").innerText = totals.pumped_12h.toLocaleString();
             document.getElementById("lcd24h").innerText = totals.pumped_24h.toLocaleString();
+
+            // Map 24H runtime payloads directly into sub-fields of status boxes
+            document.getElementById("runW1").innerText = totals.w1_24h;
+            document.getElementById("runW3").innerText = totals.w3_24h;
+            document.getElementById("runW4").innerText = totals.w4_24h;
+            document.getElementById("runW5").innerText = totals.w5_24h;
+            document.getElementById("runP1").innerText = totals.p1_24h;
+            document.getElementById("runP2").innerText = totals.p2_24h;
         } catch(e) { console.error("History engine integration sync failed:", e); }
     }
 
