@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HTi Fabrication, LLC - Equipment Alert Signup</title>
+    <style>
+        body { font-family: Arial, sans-serif; max-width: 500px; margin: 40px auto; padding: 20px; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
+        .form-group { margin-bottom: 15px; }
+        label { display: block; font-weight: bold; margin-bottom: 5px; }
+        input[type="text"], input[type="tel"] { width: 100%; padding: 10px; box-sizing: border-box; border: 1px solid #ccc; border-radius: 4px; }
+        .checkbox-group { display: flex; align-items: flex-start; gap: 10px; margin: 15px 0; }
+        .checkbox-group input { margin-top: 3px; }
+        .disclosure-text { font-size: 12px; color: #555; line-height: 1.4; }
+        .disclosure-text a { color: #0066cc; text-decoration: underline; }
+        button { background-color: #0056b3; color: white; padding: 12px 20px; border: none; border-radius: 4px; cursor: pointer; font-size: 16px; width: 100%; font-weight: bold; }
+        button:hover { background-color: #003d80; }
+        button:disabled { background-color: #cccccc; cursor: not-allowed; }
+        #status-msg { margin-top: 15px; font-weight: bold; text-align: center; }
+    </style>
+</head>
+<body>
+
+    <h2>HTi Fabrication, LLC</h2>
+    <p>Sign up to receive immediate SMS notifications regarding equipment failures and status updates.</p>
+
+    <form id="optinForm">
+        <div class="form-group">
+            <label for="name">Full Name</label>
+            <input type="text" id="name" name="name" required placeholder="John Doe">
+        </div>
+
+        <div class="form-group">
+            <label for="phone">Mobile Phone Number</label>
+            <input type="tel" id="phone" name="phone" required placeholder="(555) 000-0000">
+        </div>
+
+        <!-- Terms & Conditions Checkbox (Optional, but best practice) -->
+        <div class="checkbox-group">
+            <input type="checkbox" id="terms" name="terms" required>
+            <label for="terms" style="font-weight: normal; font-size: 14px;">
+                I accept the <a href="https://htifabrication.com/terms" target="_blank">Terms of Service</a> and <a href="https://htifabrication.com/privacy" target="_blank">Privacy Policy</a>.
+            </label>
+        </div>
+
+        <!-- Dedicated SMS Consent Checkbox (MUST BE UNCHECKED BY DEFAULT) -->
+        <div class="checkbox-group">
+            <input type="checkbox" id="sms_consent" name="sms_consent" required>
+            <label for="sms_consent" id="consent_label" class="disclosure-text">
+                By checking this box, you agree to receive automated SMS text message alerts regarding <strong>equipment failures and status updates</strong> from <strong>HTi Fabrication, LLC</strong> at the phone number provided above. Consent is strictly for equipment status alerts and is not required as a condition of purchasing any goods or services. Message frequency varies based on equipment status. Message and data rates may apply. Reply <strong>STOP</strong> to unsubscribe or <strong>HELP</strong> for assistance. View our <a href="https://htifabrication.com/privacy" target="_blank">Privacy Policy</a> and <a href="https://htifabrication.com/terms" target="_blank">Terms of Service</a>.
+            </label>
+        </div>
+
+        <button type="submit" id="submitBtn">Subscribe to Equipment Alerts</button>
+    </form>
+
+    <div id="status-msg"></div>
+
+    <script>
+        const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxioAq537WbPTX7EW4xjIzfPF5xBkzipah6yzInr6OQagHUHC6kK4pdLuHCvg645RgdEQ/exec";
+
+        document.getElementById('optinForm').addEventListener('submit', async function(e) {
+            e.preventDefault();
+            const btn = document.getElementById('submitBtn');
+            const statusMsg = document.getElementById('status-msg');
+            
+            btn.disabled = true;
+            btn.innerText = "Submitting...";
+            statusMsg.innerText = "";
+
+            // Fetch visitor IP address for compliance logging
+            let userIp = "Unknown";
+            try {
+                const ipResponse = await fetch('https://api.ipify.org?format=json');
+                const ipData = await ipResponse.json();
+                userIp = ipData.ip;
+            } catch (err) {
+                console.warn("Could not fetch IP address");
+            }
+
+            // Extract form inputs
+            const name = document.getElementById('name').value;
+            const phone = document.getElementById('phone').value;
+            const consentText = document.getElementById('consent_label').innerText;
+
+            // Prepare payload for Google Apps Script
+            const formData = new URLSearchParams();
+            formData.append('name', name);
+            formData.append('phone', phone);
+            formData.append('ip', userIp);
+            formData.append('consent_text', consentText);
+
+            try {
+                await fetch(WEB_APP_URL, {
+                    method: 'POST',
+                    mode: 'no-cors',
+                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+                    body: formData
+                });
+
+                statusMsg.style.color = "green";
+                statusMsg.innerText = "Opt-in saved successfully! You are registered for alerts.";
+                document.getElementById('optinForm').reset();
+            } catch (error) {
+                statusMsg.style.color = "red";
+                statusMsg.innerText = "An error occurred. Please try again.";
+                console.error(error);
+            } finally {
+                btn.disabled = false;
+                btn.innerText = "Subscribe to Equipment Alerts";
+            }
+        });
+    </script>
+</body>
+</html>
