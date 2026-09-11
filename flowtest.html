@@ -10,9 +10,10 @@
     .status-badge.online { background: #28a745; }
     .status-badge.offline { background: #dc3545; }
     
-    .ip-info { margin-bottom: 25px; font-weight: bold; color: #333; }
-    .ip-info a { color: #007bff; text-decoration: none; }
-    .ip-info a:hover { text-decoration: underline; }
+    .ip-container { margin-bottom: 25px; }
+    .ip-link-btn { display: inline-block; padding: 8px 16px; background-color: #007bff; color: white; text-decoration: none; border-radius: 5px; font-weight: bold; transition: background-color 0.2s; }
+    .ip-link-btn:hover { background-color: #0056b3; }
+    .ip-link-disabled { display: inline-block; padding: 8px 16px; background-color: #e0e0e0; color: #888; border-radius: 5px; font-weight: bold; }
 
     .section-title { margin-top: 20px; font-size: 1.4em; color: #333; }
     .container { display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; margin-bottom: 25px; }
@@ -35,7 +36,10 @@
   <h2>TUF-2000B Flowmeter System Dashboard</h2>
 
   <div id="esp-badge" class="status-badge offline">ESP32: OFFLINE</div>
-  <div class="ip-info">Local IP Address: <span id="espIp">Searching...</span></div>
+  
+  <div class="ip-container">
+    <div id="ipBtnWrapper" class="ip-link-disabled">Local Server: Waiting for IP...</div>
+  </div>
 
   <div class="section-title">Live Telemetry</div>
   <div class="container">
@@ -152,8 +156,11 @@
         try {
           const data = JSON.parse(payload.toString());
           
+          // Generate Clickable Button Link for Local IP
           if (data.ip_address) {
-            document.getElementById('espIp').innerHTML = `<a href="http://${data.ip_address}" target="_blank">${data.ip_address}</a>`;
+            const btnWrapper = document.getElementById('ipBtnWrapper');
+            btnWrapper.className = "";
+            btnWrapper.innerHTML = `<a href="http://${data.ip_address}" target="_blank" class="ip-link-btn">Open Local Server (${data.ip_address})</a>`;
           }
 
           if (data.status === "ok") {
