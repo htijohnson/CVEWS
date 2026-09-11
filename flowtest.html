@@ -2,33 +2,88 @@
 <html lang="en">
 <head>
   <meta charset="UTF-8">
-  <title>TUF-2000B Live HiveMQ Dashboard</title>
+  <title>TUF-2000B Live HiveMQ & Historical Dashboard</title>
   <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
   <style>
-    body { font-family: Arial, sans-serif; text-align: center; background: #f4f4f9; padding-top: 40px; }
-    .status-badge { display: inline-block; padding: 8px 16px; border-radius: 20px; font-weight: bold; margin-bottom: 25px; color: white; background: #6c757d; }
+    body { font-family: Arial, sans-serif; text-align: center; background: #f4f4f9; padding: 20px; }
+    .status-badge { display: inline-block; padding: 8px 16px; border-radius: 20px; font-weight: bold; margin-bottom: 20px; color: white; background: #6c757d; }
     .status-badge.online { background: #28a745; }
     .status-badge.offline { background: #dc3545; }
-    .container { display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; }
-    .card { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 220px; }
-    .value { font-size: 2em; color: #007bff; font-weight: bold; margin-top: 10px; }
-    #mqtt-status { margin-top: 30px; font-weight: bold; color: #555; }
+    
+    .section-title { margin-top: 30px; font-size: 1.4em; color: #333; }
+    .container { display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; margin-bottom: 25px; }
+    .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 180px; }
+    .value { font-size: 1.6em; color: #007bff; font-weight: bold; margin-top: 8px; }
+    .sub-text { font-size: 0.85em; color: #666; margin-top: 4px; }
+    
+    .report-card { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); max-width: 600px; margin: 0 auto 30px auto; }
+    .form-group { margin: 10px 0; text-align: left; display: inline-block; }
+    .form-group label { display: block; font-size: 0.85em; margin-bottom: 3px; font-weight: bold; }
+    .form-group input { padding: 8px; border: 1px solid #ccc; border-radius: 5px; }
+    .btn { background: #007bff; color: white; border: none; padding: 10px 20px; font-size: 1em; border-radius: 5px; cursor: pointer; margin-top: 15px; }
+    .btn:hover { background: #0056b3; }
+    
+    #mqtt-status { font-weight: bold; color: #555; }
   </style>
 </head>
 <body>
 
-  <h2>TUF-2000B Live Dashboard</h2>
+  <h2>TUF-2000B Flowmeter System Dashboard</h2>
 
   <div id="esp-badge" class="status-badge offline">ESP32: OFFLINE</div>
 
+  <div class="section-title">Live Telemetry</div>
   <div class="container">
     <div class="card">
-      <h3>Current Flow Rate</h3>
+      <h3>Current Flow</h3>
       <div class="value" id="flowRate">--</div>
     </div>
     <div class="card">
-      <h3>Total Flow</h3>
+      <h3>Lifetime Total</h3>
       <div class="value" id="totalFlow">--</div>
+    </div>
+  </div>
+
+  <div class="section-title">Historical Consumption (Google Sheets)</div>
+  <div class="container">
+    <div class="card">
+      <h3>Past 1 Hour</h3>
+      <div class="value" id="flow1h">--</div>
+      <div class="sub-text">m3 total</div>
+    </div>
+    <div class="card">
+      <h3>Past 6 Hours</h3>
+      <div class="value" id="flow6h">--</div>
+      <div class="sub-text">m3 total</div>
+    </div>
+    <div class="card">
+      <h3>Past 12 Hours</h3>
+      <div class="value" id="flow12h">--</div>
+      <div class="sub-text">m3 total</div>
+    </div>
+    <div class="card">
+      <h3>Past 24 Hours</h3>
+      <div class="value" id="flow24h">--</div>
+      <div class="sub-text">m3 total</div>
+    </div>
+  </div>
+
+  <div class="report-card">
+    <h3>Custom Range Flow Report</h3>
+    <div class="form-group">
+      <label>Start Time:</label>
+      <input type="datetime-local" id="startTime">
+    </div>
+    <div class="form-group" style="margin-left: 15px;">
+      <label>End Time:</label>
+      <input type="datetime-local" id="endTime">
+    </div>
+    <br>
+    <button class="btn" onclick="generateReport()">Generate Report</button>
+
+    <div style="margin-top: 20px;">
+      <strong>Calculated Flow in Range:</strong>
+      <div class="value" id="customResult">--</div>
     </div>
   </div>
 
@@ -44,8 +99,12 @@
     const mqttUser = "cvewstest";
     const mqttPassword = "cvewstest1";
 
-    let heartbeatTimer = null;
+    const googleAppUrl = "https://script.google.com/macros/s/AKfycbwxsJZH_EOo4uYUtws1NBxNu92Ol1dhUhmQVDL4jep9nzn42hbqcQKkpecNoXbrVlc/exec";
 
+    let heartbeatTimer = null;
+    let historicalLogs = [];
+
+    // --- MQTT Live Dashboard Logic ---
     const client = mqtt.connect(`wss://${host}:${port}${path}`, {
       username: mqttUser,
       password: mqttPassword,
@@ -66,7 +125,6 @@
     function resetHeartbeat() {
       setEspStatus(true);
       clearTimeout(heartbeatTimer);
-      // Mark offline if no message received within 10 seconds
       heartbeatTimer = setTimeout(() => setEspStatus(false), 10000);
     }
 
@@ -79,8 +137,7 @@
 
     client.on('message', (topic, payload) => {
       if (topic === topicStatus) {
-        const statusStr = payload.toString().trim();
-        setEspStatus(statusStr === "online");
+        setEspStatus(payload.toString().trim() === "online");
       }
 
       if (topic === topicData) {
@@ -90,9 +147,6 @@
           if (data.status === "ok") {
             document.getElementById('flowRate').innerText = `${data.flow_rate.toFixed(3)} ${data.flow_unit}`;
             document.getElementById('totalFlow').innerText = `${data.total_flow.toFixed(1)} ${data.total_unit}`;
-          } else {
-            document.getElementById('mqtt-status').innerText = `Modbus Error Code: 0x${data.error_code.toString(16)}`;
-            document.getElementById('mqtt-status').style.color = "red";
           }
         } catch (e) {
           console.error("JSON parse error:", e);
@@ -101,11 +155,69 @@
     });
 
     client.on('error', (err) => {
-      console.error("MQTT Error:", err);
       document.getElementById('mqtt-status').innerText = "Status: HiveMQ Connection Error";
       document.getElementById('mqtt-status').style.color = "red";
       setEspStatus(false);
     });
+
+    // --- Google Sheets Historical Processing Logic ---
+    async function fetchHistoricalData() {
+      try {
+        const res = await fetch(googleAppUrl);
+        historicalLogs = await res.json();
+        
+        if (!Array.isArray(historicalLogs) || historicalLogs.length === 0) return;
+
+        const now = new Date().getTime();
+
+        document.getElementById('flow1h').innerText = calculateDelta(now - (1 * 3600 * 1000), now);
+        document.getElementById('flow6h').innerText = calculateDelta(now - (6 * 3600 * 1000), now);
+        document.getElementById('flow12h').innerText = calculateDelta(now - (12 * 3600 * 1000), now);
+        document.getElementById('flow24h').innerText = calculateDelta(now - (24 * 3600 * 1000), now);
+
+      } catch (err) {
+        console.error("Failed to load historical data from Google Sheets:", err);
+      }
+    }
+
+    function calculateDelta(startTimeMs, endTimeMs) {
+      const filtered = historicalLogs.filter(row => {
+        const t = new Date(row.timestamp).getTime();
+        return t >= startTimeMs && t <= endTimeMs;
+      });
+
+      if (filtered.length < 2) return "0.0 m3";
+
+      const startTotal = filtered[0].total_flow;
+      const endTotal = filtered[filtered.length - 1].total_flow;
+      const delta = endTotal - startTotal;
+
+      return (delta >= 0 ? delta : 0).toFixed(2) + " m3";
+    }
+
+    function generateReport() {
+      const startVal = document.getElementById('startTime').value;
+      const endVal = document.getElementById('endTime').value;
+
+      if (!startVal || !endVal) {
+        alert("Please select both a Start Time and End Time.");
+        return;
+      }
+
+      const startMs = new Date(startVal).getTime();
+      const endMs = new Date(endVal).getTime();
+
+      if (startMs >= endMs) {
+        alert("End Time must be after Start Time.");
+        return;
+      }
+
+      document.getElementById('customResult').innerText = calculateDelta(startMs, endMs);
+    }
+
+    // Refresh Google Sheets statistics every 60 seconds
+    fetchHistoricalData();
+    setInterval(fetchHistoricalData, 60000);
   </script>
 </body>
 </html>
