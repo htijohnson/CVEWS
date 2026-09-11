@@ -6,11 +6,15 @@
   <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
   <style>
     body { font-family: Arial, sans-serif; text-align: center; background: #f4f4f9; padding: 20px; }
-    .status-badge { display: inline-block; padding: 8px 16px; border-radius: 20px; font-weight: bold; margin-bottom: 20px; color: white; background: #6c757d; }
+    .status-badge { display: inline-block; padding: 8px 16px; border-radius: 20px; font-weight: bold; margin-bottom: 10px; color: white; background: #6c757d; }
     .status-badge.online { background: #28a745; }
     .status-badge.offline { background: #dc3545; }
     
-    .section-title { margin-top: 30px; font-size: 1.4em; color: #333; }
+    .ip-info { margin-bottom: 25px; font-weight: bold; color: #333; }
+    .ip-info a { color: #007bff; text-decoration: none; }
+    .ip-info a:hover { text-decoration: underline; }
+
+    .section-title { margin-top: 20px; font-size: 1.4em; color: #333; }
     .container { display: flex; justify-content: center; gap: 15px; flex-wrap: wrap; margin-bottom: 25px; }
     .card { background: white; padding: 20px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 180px; }
     .value { font-size: 1.6em; color: #007bff; font-weight: bold; margin-top: 8px; }
@@ -31,6 +35,7 @@
   <h2>TUF-2000B Flowmeter System Dashboard</h2>
 
   <div id="esp-badge" class="status-badge offline">ESP32: OFFLINE</div>
+  <div class="ip-info">Local IP Address: <span id="espIp">Searching...</span></div>
 
   <div class="section-title">Live Telemetry</div>
   <div class="container">
@@ -49,22 +54,22 @@
     <div class="card">
       <h3>Past 1 Hour</h3>
       <div class="value" id="flow1h">--</div>
-      <div class="sub-text">m3 total</div>
+      <div class="sub-text">Gallons total</div>
     </div>
     <div class="card">
       <h3>Past 6 Hours</h3>
       <div class="value" id="flow6h">--</div>
-      <div class="sub-text">m3 total</div>
+      <div class="sub-text">Gallons total</div>
     </div>
     <div class="card">
       <h3>Past 12 Hours</h3>
       <div class="value" id="flow12h">--</div>
-      <div class="sub-text">m3 total</div>
+      <div class="sub-text">Gallons total</div>
     </div>
     <div class="card">
       <h3>Past 24 Hours</h3>
       <div class="value" id="flow24h">--</div>
-      <div class="sub-text">m3 total</div>
+      <div class="sub-text">Gallons total</div>
     </div>
   </div>
 
@@ -100,6 +105,8 @@
     const mqttPassword = "cvewstest1";
 
     const googleAppUrl = "https://script.google.com/macros/s/AKfycbwxsJZH_EOo4uYUtws1NBxNu92Ol1dhUhmQVDL4jep9nzn42hbqcQKkpecNoXbrVlc/exec";
+
+    const M3_TO_GALLONS = 264.172;
 
     let heartbeatTimer = null;
     let historicalLogs = [];
@@ -144,9 +151,17 @@
         resetHeartbeat();
         try {
           const data = JSON.parse(payload.toString());
+          
+          if (data.ip_address) {
+            document.getElementById('espIp').innerHTML = `<a href="http://${data.ip_address}" target="_blank">${data.ip_address}</a>`;
+          }
+
           if (data.status === "ok") {
-            document.getElementById('flowRate').innerText = `${data.flow_rate.toFixed(3)} ${data.flow_unit}`;
-            document.getElementById('totalFlow').innerText = `${data.total_flow.toFixed(1)} ${data.total_unit}`;
+            const gpm = (data.flow_rate * M3_TO_GALLONS) / 60;
+            const totalGallons = data.total_flow * M3_TO_GALLONS;
+
+            document.getElementById('flowRate').innerText = `${gpm.toFixed(2)} GPM`;
+            document.getElementById('totalFlow').innerText = `${totalGallons.toFixed(0)} Gal`;
           }
         } catch (e) {
           console.error("JSON parse error:", e);
@@ -186,13 +201,14 @@
         return t >= startTimeMs && t <= endTimeMs;
       });
 
-      if (filtered.length < 2) return "0.0 m3";
+      if (filtered.length < 2) return "0 Gal";
 
-      const startTotal = filtered[0].total_flow;
-      const endTotal = filtered[filtered.length - 1].total_flow;
-      const delta = endTotal - startTotal;
+      const startTotalM3 = filtered[0].total_flow;
+      const endTotalM3 = filtered[filtered.length - 1].total_flow;
+      const deltaM3 = endTotalM3 - startTotalM3;
 
-      return (delta >= 0 ? delta : 0).toFixed(2) + " m3";
+      const deltaGallons = deltaM3 > 0 ? deltaM3 * M3_TO_GALLONS : 0;
+      return deltaGallons.toFixed(0) + " Gal";
     }
 
     function generateReport() {
@@ -215,7 +231,6 @@
       document.getElementById('customResult').innerText = calculateDelta(startMs, endMs);
     }
 
-    // Refresh Google Sheets statistics every 60 seconds
     fetchHistoricalData();
     setInterval(fetchHistoricalData, 60000);
   </script>
