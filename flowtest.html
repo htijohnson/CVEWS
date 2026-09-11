@@ -6,15 +6,20 @@
   <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
   <style>
     body { font-family: Arial, sans-serif; text-align: center; background: #f4f4f9; padding-top: 40px; }
+    .status-badge { display: inline-block; padding: 8px 16px; border-radius: 20px; font-weight: bold; margin-bottom: 25px; color: white; background: #6c757d; }
+    .status-badge.online { background: #28a745; }
+    .status-badge.offline { background: #dc3545; }
     .container { display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; }
     .card { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 220px; }
     .value { font-size: 2em; color: #007bff; font-weight: bold; margin-top: 10px; }
-    #status { margin-top: 30px; font-weight: bold; color: #555; }
+    #mqtt-status { margin-top: 30px; font-weight: bold; color: #555; }
   </style>
 </head>
 <body>
 
   <h2>TUF-2000B Live Dashboard</h2>
+
+  <div id="esp-badge" class="status-badge offline">ESP32: OFFLINE</div>
 
   <div class="container">
     <div class="card">
@@ -27,16 +32,19 @@
     </div>
   </div>
 
-  <p id="status">Connecting to HiveMQ Cloud...</p>
+  <p id="mqtt-status">Connecting to HiveMQ Cloud...</p>
 
   <script>
     const host = "91edf0b43131429b9a2d60d852310ada.s1.eu.hivemq.cloud";
     const port = 8884;
     const path = "/mqtt";
-    const topic = "tuf2000b/data";
+    const topicData = "tuf2000b/data";
+    const topicStatus = "tuf2000b/status";
 
     const mqttUser = "cvewstest";
     const mqttPassword = "cvewstest1";
+
+    let heartbeatTimer = null;
 
     const client = mqtt.connect(`wss://${host}:${port}${path}`, {
       username: mqttUser,
@@ -44,31 +52,59 @@
       clientId: "WebDashboard_" + Math.random().toString(16).substring(2, 8)
     });
 
+    function setEspStatus(isOnline) {
+      const badge = document.getElementById('esp-badge');
+      if (isOnline) {
+        badge.innerText = "ESP32: ONLINE";
+        badge.className = "status-badge online";
+      } else {
+        badge.innerText = "ESP32: OFFLINE";
+        badge.className = "status-badge offline";
+      }
+    }
+
+    function resetHeartbeat() {
+      setEspStatus(true);
+      clearTimeout(heartbeatTimer);
+      // Mark offline if no message received within 10 seconds
+      heartbeatTimer = setTimeout(() => setEspStatus(false), 10000);
+    }
+
     client.on('connect', () => {
-      document.getElementById('status').innerText = "Status: Connected to HiveMQ Cloud";
-      document.getElementById('status').style.color = "green";
-      client.subscribe(topic);
+      document.getElementById('mqtt-status').innerText = "Status: Connected to HiveMQ Cloud";
+      document.getElementById('mqtt-status').style.color = "green";
+      client.subscribe(topicData);
+      client.subscribe(topicStatus);
     });
 
-    client.on('message', (receivedTopic, payload) => {
-      try {
-        const data = JSON.parse(payload.toString());
-        if (data.status === "ok") {
-          document.getElementById('flowRate').innerText = `${data.flow_rate.toFixed(3)} ${data.flow_unit}`;
-          document.getElementById('totalFlow').innerText = `${data.total_flow.toFixed(1)} ${data.total_unit}`;
-        } else {
-          document.getElementById('status').innerText = `Modbus Error Code: 0x${data.error_code.toString(16)}`;
-          document.getElementById('status').style.color = "red";
+    client.on('message', (topic, payload) => {
+      if (topic === topicStatus) {
+        const statusStr = payload.toString().trim();
+        setEspStatus(statusStr === "online");
+      }
+
+      if (topic === topicData) {
+        resetHeartbeat();
+        try {
+          const data = JSON.parse(payload.toString());
+          if (data.status === "ok") {
+            document.getElementById('flowRate').innerText = `${data.flow_rate.toFixed(3)} ${data.flow_unit}`;
+            document.getElementById('totalFlow').innerText = `${data.total_flow.toFixed(1)} ${data.total_unit}`;
+          } else {
+            document.getElementById('mqtt-status').innerText = `Modbus Error Code: 0x${data.error_code.toString(16)}`;
+            document.getElementById('mqtt-status').style.color = "red";
+          }
+        } catch (e) {
+          console.error("JSON parse error:", e);
         }
-      } catch (e) {
-        console.error("JSON parse error:", e);
       }
     });
 
     client.on('error', (err) => {
       console.error("MQTT Error:", err);
-      document.getElementById('status').innerText = "Status: HiveMQ Connection Error";
-      document.getElementById('status').style.color = "red";
+      document.getElementById('mqtt-status').innerText = "Status: HiveMQ Connection Error";
+      document.getElementById('mqtt-status').style.color = "red";
+      setEspStatus(false);
     });
   </script>
 </body>
