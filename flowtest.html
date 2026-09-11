@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>TUF-2000B Live HiveMQ Dashboard</title>
+  <script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; text-align: center; background: #f4f4f9; padding-top: 40px; }
+    .container { display: flex; justify-content: center; gap: 20px; flex-wrap: wrap; }
+    .card { background: white; padding: 25px; border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.1); width: 220px; }
+    .value { font-size: 2em; color: #007bff; font-weight: bold; margin-top: 10px; }
+    #status { margin-top: 30px; font-weight: bold; color: #555; }
+  </style>
+</head>
+<body>
+
+  <h2>TUF-2000B Live Dashboard</h2>
+
+  <div class="container">
+    <div class="card">
+      <h3>Current Flow Rate</h3>
+      <div class="value" id="flowRate">--</div>
+    </div>
+    <div class="card">
+      <h3>Total Flow</h3>
+      <div class="value" id="totalFlow">--</div>
+    </div>
+  </div>
+
+  <p id="status">Connecting to HiveMQ Cloud...</p>
+
+  <script>
+    const host = "91edf0b43131429b9a2d60d852310ada.s1.eu.hivemq.cloud";
+    const port = 8884;
+    const path = "/mqtt";
+    const topic = "tuf2000b/data";
+
+    const mqttUser = "cvewstest";
+    const mqttPassword = "cvewstest1";
+
+    const client = mqtt.connect(`wss://${host}:${port}${path}`, {
+      username: mqttUser,
+      password: mqttPassword,
+      clientId: "WebDashboard_" + Math.random().toString(16).substring(2, 8)
+    });
+
+    client.on('connect', () => {
+      document.getElementById('status').innerText = "Status: Connected to HiveMQ Cloud";
+      document.getElementById('status').style.color = "green";
+      client.subscribe(topic);
+    });
+
+    client.on('message', (receivedTopic, payload) => {
+      try {
+        const data = JSON.parse(payload.toString());
+        if (data.status === "ok") {
+          document.getElementById('flowRate').innerText = `${data.flow_rate.toFixed(3)} ${data.flow_unit}`;
+          document.getElementById('totalFlow').innerText = `${data.total_flow.toFixed(1)} ${data.total_unit}`;
+        } else {
+          document.getElementById('status').innerText = `Modbus Error Code: 0x${data.error_code.toString(16)}`;
+          document.getElementById('status').style.color = "red";
+        }
+      } catch (e) {
+        console.error("JSON parse error:", e);
+      }
+    });
+
+    client.on('error', (err) => {
+      console.error("MQTT Error:", err);
+      document.getElementById('status').innerText = "Status: HiveMQ Connection Error";
+      document.getElementById('status').style.color = "red";
+    });
+  </script>
+</body>
+</html>
