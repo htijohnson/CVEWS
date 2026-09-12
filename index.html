@@ -204,7 +204,6 @@
     const MQTT_HOST = "91edf0b43131429b9a2d60d852310ada.s1.eu.hivemq.cloud"; 
     const MQTT_PORT = 8884;
     
-    // Configured with Subscribe-Only Read Credentials
     const MQTT_USER = "cvewsobserver"; 
     const MQTT_PASS = "Water123";  
     
@@ -213,6 +212,8 @@
     const M3_TO_GALLONS = 264.172;
     
     const GOOGLE_WEB_APP_URL = "https://script.google.com/macros/s/AKfycby0tMJYWzvQIr-bqjViqPL8Fs4qridwhoOxA5ZrIZUefblbCPiikQe7u7Zhk8N03dQ/exec";
+
+    let historicalLogs = [];
 
     const client = new Paho.MQTT.Client("wss://" + MQTT_HOST + ":" + MQTT_PORT + "/mqtt", "CVEWS_WebDash_" + Math.random().toString(16).substr(2, 8));
 
@@ -226,7 +227,6 @@
         try {
             const data = JSON.parse(message.payloadString);
 
-            // Handle dedicated TUF-2000B ESP32 payload topic
             if (message.destinationName === MQTT_TOPIC_TUF || data.flow_rate !== undefined) {
                 if (data.status === "ok" || data.flow_rate !== undefined) {
                     const gpm = (data.flow_rate * M3_TO_GALLONS) / 60;
@@ -235,7 +235,6 @@
                 return;
             }
 
-            // 1. Small Tank Gauge Logic
             if (data.tk_sm !== undefined) {
                 const maxSmall = 4100;
                 const pctSmall = Math.min(Math.max((data.tk_sm / maxSmall) * 100, 0), 100);
@@ -257,7 +256,6 @@
                 }
             }
 
-            // 2. Large Tank Gauge Logic
             if (data.tk_lg !== undefined) {
                 const maxLarge = 71000;
                 const pctLarge = Math.min(Math.max((data.tk_lg / maxLarge) * 100, 0), 100);
@@ -279,12 +277,10 @@
                 }
             }
 
-            // 3. Direct GPM Flow Payload
             if (data.flow !== undefined) {
                 updateFlowGauge(data.flow);
             }
 
-            // 4. CL-17 Chlorine Content Gauge Logic
             if (data.cl2 !== undefined) {
                 const maxCl2 = 2.0; 
                 const pctCl2 = Math.min(Math.max((data.cl2 / maxCl2) * 100, 0), 100);
@@ -307,7 +303,6 @@
                 }
             }
 
-            // 5. Update Digital Relay States
             toggleBadge("badgeW1", data.w1, "active-green", "Running", "Not Running");
             toggleBadge("badgeW3", data.w3, "active-green", "Running", "Not Running");
             toggleBadge("badgeW4", data.w4, "active-green", "Running", "Not Running");
@@ -364,37 +359,53 @@
     async function updateHistoricalLCDs() {
         try {
             const response = await fetch(GOOGLE_WEB_APP_URL);
-            const totals = await response.json();
+            historicalLogs = await response.json();
             
-            if (totals.error) return;
-            
-            // Map totalizer payloads
-            document.getElementById("lcd1h").innerText = (totals.pumped_1h || 0).toLocaleString();
-            document.getElementById("lcd6h").innerText = (totals.pumped_6h || 0).toLocaleString();
-            document.getElementById("lcd12h").innerText = (totals.pumped_12h || 0).toLocaleString();
-            document.getElementById("lcd24h").innerText = (totals.pumped_24h || 0).toLocaleString();
+            if (!Array.isArray(historicalLogs) || historicalLogs.length === 0) return;
 
-            // Map 24H input runtimes
-            document.getElementById("runW1").innerText = totals.w1_24h || "0.0";
-            document.getElementById("runW3").innerText = totals.w3_24h || "0.0";
-            document.getElementById("runW4").innerText = totals.w4_24h || "0.0";
-            document.getElementById("runW5").innerText = totals.w5_24h || "0.0";
-            document.getElementById("runP1").innerText = totals.p1_24h || "0.0";
-            document.getElementById("runP2").innerText = totals.p2_24h || "0.0";
+            const now = new Date().getTime();
 
-            // Map 24H Tank Ranges
-            document.getElementById("smMin").innerText = (totals.sm_min || 0).toLocaleString() + "G";
-            document.getElementById("smMax").innerText = (totals.sm_max || 0).toLocaleString() + "G";
-            document.getElementById("lgMin").innerText = (totals.lg_min || 0).toLocaleString() + "G";
-            document.getElementById("lgMax").innerText = (totals.lg_max || 0).toLocaleString() + "G";
-
-            // Map rolling 30-Day Alarm event tracker property
-            document.getElementById("alm30d").innerText = totals.alarm_30d_count !== undefined ? totals.alarm_30d_count : "0";
+            document.getElementById("lcd1h").innerText = calculateIntegratedVolume(now - (1 * 3600 * 1000), now);
+            document.getElementById("lcd6h").innerText = calculateIntegratedVolume(now - (6 * 3600 * 1000), now);
+            document.getElementById("lcd12h").innerText = calculateIntegratedVolume(now - (12 * 3600 * 1000), now);
+            document.getElementById("lcd24h").innerText = calculateIntegratedVolume(now - (24 * 3600 * 1000), now);
         } catch(e) { console.error("History engine integration sync failed:", e); }
     }
 
+    // Integrate flow rate (Column B) over time (Column A) using the trapezoidal rule
+    function calculateIntegratedVolume(startTimeMs, endTimeMs) {
+        const filtered = historicalLogs.filter(row => {
+            const t = new Date(row.timestamp).getTime();
+            return t >= startTimeMs && t <= endTimeMs;
+        });
+
+        if (filtered.length < 2) return "0";
+
+        let totalM3 = 0;
+
+        for (let i = 1; i < filtered.length; i++) {
+            const tPrev = new Date(filtered[i - 1].timestamp).getTime();
+            const tCurr = new Date(filtered[i].timestamp).getTime();
+            
+            const ratePrev = parseFloat(filtered[i - 1].flow_rate) || 0; // m3/h from Column B
+            const rateCurr = parseFloat(filtered[i].flow_rate) || 0;     // m3/h from Column B
+
+            // Convert delta time from milliseconds to hours
+            const deltaHours = (tCurr - tPrev) / (1000 * 3600);
+
+            // Ignore invalid negative or absurdly large gaps (e.g., system downtime > 2 hours)
+            if (deltaHours > 0 && deltaHours < 2) {
+                // Trapezoidal integration: Avg Rate (m3/h) * Time (hours) = m3
+                const segmentVolumeM3 = ((ratePrev + rateCurr) / 2) * deltaHours;
+                totalM3 += segmentVolumeM3;
+            }
+        }
+
+        const totalGallons = totalM3 * M3_TO_GALLONS;
+        return Math.round(totalGallons).toLocaleString();
+    }
+
     function connectBroker() {
-        console.log("Connecting to secured cloud cluster with subscribe-only account...");
         client.connect({
             onSuccess: () => {
                 document.getElementById("alarmBanner").className = "alarm-banner alarm-normal";
@@ -403,7 +414,6 @@
                 client.subscribe(MQTT_TOPIC_TUF);
             },
             onFailure: (err) => { 
-                console.error("Connection failed. Serverless instance may be waking up.", err); 
                 setTimeout(connectBroker, 5000); 
             },
             userName: MQTT_USER,
