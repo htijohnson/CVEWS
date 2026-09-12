@@ -26,7 +26,7 @@
     .form-group label { display: block; font-size: 0.85em; margin-bottom: 3px; font-weight: bold; }
     .form-group input { padding: 8px; border: 1px solid #ccc; border-radius: 5px; }
     .btn { background: #007bff; color: white; border: none; padding: 10px 20px; font-size: 1em; border-radius: 5px; cursor: pointer; margin-top: 15px; }
-    .btn:hover { background: #0056b3; }
+    .btn:hover { background-color: #0056b3; }
     
     #mqtt-status { font-weight: bold; color: #555; }
   </style>
@@ -105,8 +105,9 @@
     const topicData = "tuf2000b/data";
     const topicStatus = "tuf2000b/status";
 
-    const mqttUser = "cvewstest";
-    const mqttPassword = "cvewstest1";
+    // Updated Read-Only Credentials
+    const mqttUser = "cvewsobserver";
+    const mqttPassword = "Water123";
 
     const googleAppUrl = "https://script.google.com/macros/s/AKfycbwxsJZH_EOo4uYUtws1NBxNu92Ol1dhUhmQVDL4jep9nzn42hbqcQKkpecNoXbrVlc/exec";
 
@@ -140,7 +141,7 @@
     }
 
     client.on('connect', () => {
-      document.getElementById('mqtt-status').innerText = "Status: Connected to HiveMQ Cloud";
+      document.getElementById('mqtt-status').innerText = "Status: Connected to HiveMQ Cloud (Read-Only)";
       document.getElementById('mqtt-status').style.color = "green";
       client.subscribe(topicData);
       client.subscribe(topicStatus);
