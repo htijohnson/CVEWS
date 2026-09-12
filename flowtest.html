@@ -193,17 +193,18 @@
 
         const now = new Date().getTime();
 
-        document.getElementById('flow1h').innerText = calculateDelta(now - (1 * 3600 * 1000), now);
-        document.getElementById('flow6h').innerText = calculateDelta(now - (6 * 3600 * 1000), now);
-        document.getElementById('flow12h').innerText = calculateDelta(now - (12 * 3600 * 1000), now);
-        document.getElementById('flow24h').innerText = calculateDelta(now - (24 * 3600 * 1000), now);
+        document.getElementById('flow1h').innerText = calculateIntegratedVolume(now - (1 * 3600 * 1000), now);
+        document.getElementById('flow6h').innerText = calculateIntegratedVolume(now - (6 * 3600 * 1000), now);
+        document.getElementById('flow12h').innerText = calculateIntegratedVolume(now - (12 * 3600 * 1000), now);
+        document.getElementById('flow24h').innerText = calculateIntegratedVolume(now - (24 * 3600 * 1000), now);
 
       } catch (err) {
         console.error("Failed to load historical data from Google Sheets:", err);
       }
     }
 
-    function calculateDelta(startTimeMs, endTimeMs) {
+    // Numerical integration of Column B (flow_rate) over Column A (timestamp)
+    function calculateIntegratedVolume(startTimeMs, endTimeMs) {
       const filtered = historicalLogs.filter(row => {
         const t = new Date(row.timestamp).getTime();
         return t >= startTimeMs && t <= endTimeMs;
@@ -211,12 +212,28 @@
 
       if (filtered.length < 2) return "0 Gal";
 
-      const startTotalM3 = filtered[0].total_flow;
-      const endTotalM3 = filtered[filtered.length - 1].total_flow;
-      const deltaM3 = endTotalM3 - startTotalM3;
+      let totalM3 = 0;
 
-      const deltaGallons = deltaM3 > 0 ? deltaM3 * M3_TO_GALLONS : 0;
-      return deltaGallons.toFixed(0) + " Gal";
+      for (let i = 1; i < filtered.length; i++) {
+        const tPrev = new Date(filtered[i - 1].timestamp).getTime();
+        const tCurr = new Date(filtered[i].timestamp).getTime();
+        
+        const ratePrev = parseFloat(filtered[i - 1].flow_rate) || 0; // m3/h from Column B
+        const rateCurr = parseFloat(filtered[i].flow_rate) || 0;     // m3/h from Column B
+
+        // Delta time in hours
+        const deltaHours = (tCurr - tPrev) / (1000 * 3600);
+
+        // Ignore invalid gaps (> 2 hours)
+        if (deltaHours > 0 && deltaHours < 2) {
+          // Trapezoidal Rule: Average Rate (m3/h) * Delta Time (hours) = m3
+          const segmentVolumeM3 = ((ratePrev + rateCurr) / 2) * deltaHours;
+          totalM3 += segmentVolumeM3;
+        }
+      }
+
+      const totalGallons = totalM3 * M3_TO_GALLONS;
+      return Math.round(totalGallons).toLocaleString() + " Gal";
     }
 
     function generateReport() {
@@ -236,7 +253,7 @@
         return;
       }
 
-      document.getElementById('customResult').innerText = calculateDelta(startMs, endMs);
+      document.getElementById('customResult').innerText = calculateIntegratedVolume(startMs, endMs);
     }
 
     fetchHistoricalData();
