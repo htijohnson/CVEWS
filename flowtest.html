@@ -27,8 +27,12 @@
     .form-group input { padding: 8px; border: 1px solid #ccc; border-radius: 5px; }
     .btn { background: #007bff; color: white; border: none; padding: 10px 20px; font-size: 1em; border-radius: 5px; cursor: pointer; margin-top: 15px; }
     .btn:hover { background-color: #0056b3; }
+    .btn-update { background: #28a745; margin-top: 10px; }
+    .btn-update:hover { background-color: #218838; }
+    .btn:disabled { background: #ccc; cursor: not-allowed; }
     
     #mqtt-status { font-weight: bold; color: #555; }
+    #ota-result { font-weight: bold; color: #007bff; margin-top: 8px; }
   </style>
 </head>
 <body>
@@ -41,7 +45,7 @@
     <div id="ipBtnWrapper" class="ip-link-disabled">Local Server: Waiting for IP...</div>
   </div>
 
-  <div class="section-title">Live Telemetry</div>
+  <div class="section-title">Live Telemetry & System Management</div>
   <div class="container">
     <div class="card">
       <h3>Current Flow</h3>
@@ -50,6 +54,12 @@
     <div class="card">
       <h3>Lifetime Total</h3>
       <div class="value" id="totalFlow">--</div>
+    </div>
+    <div class="card">
+      <h3>Firmware OTA</h3>
+      <div class="sub-text" id="fwVersion">Version: --</div>
+      <button id="updateBtn" class="btn btn-update" onclick="requestOtaUpdate()">Check for Update</button>
+      <div id="ota-result" class="sub-text">Ready</div>
     </div>
   </div>
 
@@ -104,10 +114,11 @@
     const path = "/mqtt";
     const topicData = "tuf2000b/data";
     const topicStatus = "tuf2000b/status";
+    const topicCmd = "tuf2000b/cmd";
 
-    // Updated Read-Only Credentials
-    const mqttUser = "cvewsobserver";
-    const mqttPassword = "Water123";
+    // Standard Credentials with Write Permissions
+    const mqttUser = "cvewstest";
+    const mqttPassword = "cvewstest1";
 
     const googleAppUrl = "https://script.google.com/macros/s/AKfycbwxsJZH_EOo4uYUtws1NBxNu92Ol1dhUhmQVDL4jep9nzn42hbqcQKkpecNoXbrVlc/exec";
 
@@ -141,23 +152,54 @@
     }
 
     client.on('connect', () => {
-      document.getElementById('mqtt-status').innerText = "Status: Connected to HiveMQ Cloud (Read-Only)";
+      document.getElementById('mqtt-status').innerText = "Status: Connected to HiveMQ Cloud";
       document.getElementById('mqtt-status').style.color = "green";
       client.subscribe(topicData);
       client.subscribe(topicStatus);
     });
 
     client.on('message', (topic, payload) => {
+      const msgStr = payload.toString().trim();
+
       if (topic === topicStatus) {
-        setEspStatus(payload.toString().trim() === "online");
+        if (msgStr === "online") {
+          setEspStatus(true);
+        } else if (msgStr === "offline") {
+          setEspStatus(false);
+        } else {
+          // Display live OTA feedback messages directly on the OTA card
+          const otaRes = document.getElementById('ota-result');
+          if (msgStr === "ota_checking") {
+            otaRes.innerText = "Checking GitHub...";
+            otaRes.style.color = "#007bff";
+          } else if (msgStr === "ota_up_to_date") {
+            otaRes.innerText = "Firmware Up to Date";
+            otaRes.style.color = "green";
+            document.getElementById('updateBtn').disabled = false;
+          } else if (msgStr === "ota_downloading") {
+            otaRes.innerText = "Downloading & Decrypting...";
+            otaRes.style.color = "#ffc107";
+          } else if (msgStr === "ota_success_rebooting") {
+            otaRes.innerText = "Update Success! Rebooting...";
+            otaRes.style.color = "green";
+            setTimeout(() => { document.getElementById('updateBtn').disabled = false; }, 10000);
+          } else if (msgStr.startsWith("ota_failed")) {
+            otaRes.innerText = `Update Error: ${msgStr}`;
+            otaRes.style.color = "red";
+            document.getElementById('updateBtn').disabled = false;
+          }
+        }
       }
 
       if (topic === topicData) {
         resetHeartbeat();
         try {
-          const data = JSON.parse(payload.toString());
+          const data = JSON.parse(msgStr);
           
-          // Generate Clickable Button Link for Local IP
+          if (data.version) {
+            document.getElementById('fwVersion').innerText = `Version: v${data.version}`;
+          }
+
           if (data.ip_address) {
             const btnWrapper = document.getElementById('ipBtnWrapper');
             btnWrapper.className = "";
@@ -183,6 +225,25 @@
       setEspStatus(false);
     });
 
+    function requestOtaUpdate() {
+      const btn = document.getElementById('updateBtn');
+      const otaRes = document.getElementById('ota-result');
+
+      btn.disabled = true;
+      otaRes.innerText = "Sending Command...";
+      otaRes.style.color = "#007bff";
+
+      client.publish(topicCmd, "UPDATE", { qos: 1 }, (err) => {
+        if (err) {
+          otaRes.innerText = "Command Failed";
+          otaRes.style.color = "red";
+          btn.disabled = false;
+        } else {
+          otaRes.innerText = "Command Sent! Waiting...";
+        }
+      });
+    }
+
     // --- Google Sheets Historical Processing Logic ---
     async function fetchHistoricalData() {
       try {
@@ -203,7 +264,6 @@
       }
     }
 
-    // Numerical integration of Column B (flow_rate) over Column A (timestamp)
     function calculateIntegratedVolume(startTimeMs, endTimeMs) {
       const filtered = historicalLogs.filter(row => {
         const t = new Date(row.timestamp).getTime();
@@ -218,15 +278,12 @@
         const tPrev = new Date(filtered[i - 1].timestamp).getTime();
         const tCurr = new Date(filtered[i].timestamp).getTime();
         
-        const ratePrev = parseFloat(filtered[i - 1].flow_rate) || 0; // m3/h from Column B
-        const rateCurr = parseFloat(filtered[i].flow_rate) || 0;     // m3/h from Column B
+        const ratePrev = parseFloat(filtered[i - 1].flow_rate) || 0;
+        const rateCurr = parseFloat(filtered[i].flow_rate) || 0;
 
-        // Delta time in hours
         const deltaHours = (tCurr - tPrev) / (1000 * 3600);
 
-        // Ignore invalid gaps (> 2 hours)
         if (deltaHours > 0 && deltaHours < 2) {
-          // Trapezoidal Rule: Average Rate (m3/h) * Delta Time (hours) = m3
           const segmentVolumeM3 = ((ratePrev + rateCurr) / 2) * deltaHours;
           totalM3 += segmentVolumeM3;
         }
