@@ -79,7 +79,7 @@
     <div class="alarm-zone">
         <div id="alarmBanner" class="alarm-banner">CONNECTING TO PRIVATE CLUSTER...</div>
         <div class="local-link-box">
-            Local Node Web Interface: <a id="localIpLink" href="#" target="_blank">Awaiting Node IP...</a>
+            Local Node Web Interface: <a href="http://cvews.local/" target="_blank">http://cvews.local/</a>
         </div>
     </div>
 
@@ -219,8 +219,7 @@
     const MQTT_TOPIC_TUF = "tuf2000b/data";
     const M3_TO_GALLONS = 264.172;
     
-    // Updated Deployment URL
-    const GOOGLE_WEB_APP_URL = "https://script.google.com/macros/s/AKfycby0tMJYWzvQIr-bqjViqPL8Fs4qridwhoOxA5ZrIZUefblbCPiikQe7u7Zhk8N03dQ/exec";
+    const GOOGLE_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbwxsJZH_EOo4uYUtws1NBxNu92Ol1dhUhmQVDL4jep9nzn42hbqcQKkpecNoXbrVlc/exec";
 
     let historicalLogs = [];
 
@@ -235,13 +234,6 @@
     client.onMessageArrived = (message) => {
         try {
             const data = JSON.parse(message.payloadString);
-
-            // Dynamically update the local IP link when published by ESP32
-            if (data.ip) {
-                const ipLink = document.getElementById("localIpLink");
-                ipLink.href = "http://" + data.ip + "/";
-                ipLink.innerText = "http://" + data.ip + "/";
-            }
 
             if (message.destinationName === MQTT_TOPIC_TUF || data.flow_rate !== undefined) {
                 if (data.status === "ok" || data.flow_rate !== undefined) {
