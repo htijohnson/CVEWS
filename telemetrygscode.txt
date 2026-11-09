@@ -1,0 +1,465 @@
+// ==========================================
+// TWILIO CREDENTIALS CONFIGURATION
+// ==========================================
+var TWILIO_ACCOUNT_SID = "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; // Your Twilio Account SID
+var TWILIO_AUTH_TOKEN  = "your_twilio_auth_token_here";        // Your Twilio Auth Token
+var TWILIO_FROM_NUMBER = "+1XXXXXXXXXX";                      // Your Twilio Phone Number (E.164 format)
+
+function sendTwilioSms(toPhone, bodyText) {
+  var url = "https://api.twilio.com/2010-04-01/Accounts/" + TWILIO_ACCOUNT_SID + "/Messages.json";
+  var options = {
+    "method": "post",
+    "headers": {
+      "Authorization": "Basic " + Utilities.base64Encode(TWILIO_ACCOUNT_SID + ":" + TWILIO_AUTH_TOKEN)
+    },
+    "payload": {
+      "To": toPhone,
+      "From": TWILIO_FROM_NUMBER,
+      "Body": bodyText
+    },
+    "muteHttpExceptions": true
+  };
+  try {
+    var response = UrlFetchApp.fetch(url, options);
+    Logger.log("Twilio SMS sent to " + toPhone + ": " + response.getContentText());
+  } catch(e) {
+    Logger.log("Error dispatching SMS to " + toPhone + ": " + e.toString());
+  }
+}
+
+function dispatchSmsToRecipients(messageBody) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var recipientSheet = ss.getSheetByName("Recipients");
+  if (!recipientSheet) {
+    Logger.log("Recipients sheet missing. SMS aborted.");
+    return;
+  }
+  
+  var lastRow = recipientSheet.getLastRow();
+  if (lastRow < 2) return;
+  
+  var data = recipientSheet.getRange(2, 1, lastRow - 1, 5).getValues();
+  
+  for (var i = 0; i < data.length; i++) {
+    // Column C (Index 2) contains the subscriber's phone number
+    var phone = String(data[i][2]).trim();
+    if (phone && phone.length >= 7) {
+      sendTwilioSms(phone, messageBody);
+    }
+  }
+}
+
+// ==========================================
+// 1. DATA LOGGER & FORM INGESTION ENTRY POINT
+// ==========================================
+function doPost(e) {
+  var mLock = LockService.getScriptLock();
+  try {
+    mLock.waitLock(30000);
+    
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+
+    // ----------------------------------------------------
+    // BRANCH A: Form Submission from optin.html
+    // ----------------------------------------------------
+    if (e && e.parameter && (e.parameter.type === "optin" || e.parameter.name || e.parameter.phone)) {
+      var recipientSheet = ss.getSheetByName("Recipients");
+      if (!recipientSheet) {
+        recipientSheet = ss.insertSheet("Recipients");
+        recipientSheet.appendRow(["Timestamp", "Full Name", "Phone / Target", "IP Address", "Consent Disclosure"]);
+        recipientSheet.getRange("A1:E1").setFontWeight("bold");
+      }
+
+      var name = e.parameter.name || "";
+      var phone = e.parameter.phone || "";
+      var ip = e.parameter.ip || "Unknown";
+      var consentText = e.parameter.consent_text || "";
+
+      recipientSheet.appendRow([new Date(), name, phone, ip, consentText]);
+
+      return ContentService.createTextOutput(JSON.stringify({ "status": "success", "message": "Opt-in saved successfully" }))
+                           .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // ----------------------------------------------------
+    // BRANCH B: ESP32 Ingestion (JSON payload)
+    // ----------------------------------------------------
+    var payloadData = JSON.parse(e.postData.contents);
+    
+    // Check for Alarm SMS Trigger (> 30 seconds tripped)
+    if (payloadData.action === "alarm_sms") {
+      var alertText = payloadData.message || "🚨 CVEWS CRITICAL ALERT: System Alarm Light active > 30s! Check https://htijohnson.github.io/CVEWS/";
+      dispatchSmsToRecipients(alertText);
+      return ContentService.createTextOutput(JSON.stringify({"status": "alarm_sms_dispatched"}))
+                           .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Check for Daily Noon Test SMS Trigger
+    if (payloadData.action === "daily_test_sms") {
+      var testText = payloadData.message || "CVEWS DAILY SYSTEM TEST: System operational. Dashboard: https://htijohnson.github.io/CVEWS/";
+      dispatchSmsToRecipients(testText);
+      return ContentService.createTextOutput(JSON.stringify({"status": "daily_test_sms_dispatched"}))
+                           .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Standard Telemetry Logging to Sheet1
+    var sheet = ss.getSheetByName("Sheet1");
+    if (!sheet) {
+      sheet = ss.insertSheet("Sheet1");
+    }
+    
+    var logRow = [
+      new Date(),                     // Col A: Timestamp
+      payloadData.tk_sm,              // Col B: Small Tank
+      payloadData.tk_lg,              // Col C: Large Tank
+      payloadData.flow,               // Col D: Flow Rate (GPM)
+      payloadData.cl2,                // Col E: Chlorine Content
+      payloadData.w1 ? 1 : 0,         // Col F: Well 1
+      payloadData.w3 ? 1 : 0,         // Col G: Well 3
+      payloadData.w4 ? 1 : 0,         // Col H: Well 4
+      payloadData.w5 ? 1 : 0,         // Col I: Well 5
+      payloadData.p1 ? 1 : 0,         // Col J: Pump 1
+      payloadData.p2 ? 1 : 0,         // Col K: Pump 2
+      payloadData.alm ? 1 : 0         // Col L: Master Alarm Status
+    ];
+    
+    sheet.appendRow(logRow);
+    
+    try {
+      scanForActiveAlarms(payloadData);
+    } catch(err) {
+      console.error("Alarm notifier error: " + err.toString());
+    }
+    
+    return ContentService.createTextOutput(JSON.stringify({"status": "success", "row": sheet.getLastRow()}))
+                         .setMimeType(ContentService.MimeType.JSON);
+                         
+  } catch(error) {
+    console.error("Inbound Post Failure: " + error.toString());
+    return ContentService.createTextOutput(JSON.stringify({"status": "error", "message": error.toString()}))
+                         .setMimeType(ContentService.MimeType.JSON);
+  } finally {
+    mLock.releaseLock();
+  }
+}
+
+// ==========================================
+// 2. ACTIVE SYSTEM ALARM THREAD ENGINE
+// ==========================================
+function scanForActiveAlarms(payloadData) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("Sheet1");
+  var lastRow = sheet.getLastRow();
+  
+  if (lastRow < 2) return; 
+  
+  var recipientSheet = ss.getSheetByName("Recipients");
+  var notifyTargets = "";
+  
+  if (recipientSheet) {
+    var lastRecipientRow = recipientSheet.getLastRow();
+    if (lastRecipientRow >= 1) {
+      var colToRead = 1;
+      var firstCell = recipientSheet.getRange(1, 1).getValue().toString().toLowerCase();
+      if (firstCell === "timestamp") {
+        colToRead = 3; 
+      }
+
+      var startRow = (firstCell === "timestamp" || firstCell === "email" || firstCell === "recipient") ? 2 : 1;
+      var numRows = lastRecipientRow - startRow + 1;
+
+      if (numRows > 0) {
+        var recipientValues = recipientSheet.getRange(startRow, colToRead, numRows, 1).getValues();
+        
+        var cleanList = recipientValues.map(function(row) {
+          return row[0] ? row[0].toString().trim() : "";
+        }).filter(function(target) {
+          return target.length > 0 && target.indexOf("@") !== -1;
+        });
+        
+        notifyTargets = cleanList.join(", ");
+      }
+    }
+  }
+  
+  if (!notifyTargets) return;
+
+  var lastAlarmCell = sheet.getRange(lastRow, 12); 
+  var alarmStatus = lastAlarmCell.getValue();
+  var currentNote = lastAlarmCell.getNote();
+  
+  var previousAlarmCell = sheet.getRange(lastRow - 1, 12);
+  var previousNote = previousAlarmCell.getNote();
+  
+  var timestamp = sheet.getRange(lastRow, 1).getValue();  
+  var tk_sm     = sheet.getRange(lastRow, 2).getValue();  
+  var tk_lg     = sheet.getRange(lastRow, 3).getValue();  
+  var flow      = sheet.getRange(lastRow, 4).getValue();  
+  
+  var formattedTime = Utilities.formatDate(new Date(timestamp), Session.getScriptTimeZone(), "MM/dd HH:mm:ss");
+
+  if ((alarmStatus === 1 || alarmStatus === "1" || alarmStatus === "TRIPPED") && currentNote !== "NOTIFIED") {
+    var emailSubject = "⚠️ CVEWS ALARM!";
+    var emailBody = "🚨 SYSTEM TRIPPED!\n" +
+                    "Time: " + formattedTime + "\n" +
+                    "• Sm Tank: " + tk_sm + " Gal\n" +
+                    "• Lg Tank: " + tk_lg + " Gal\n" +
+                    "• Flow: " + flow + " GPM\n" +
+                    "Dash: https://htijohnson.github.io/CVEWS/"; 
+                    
+    try {
+      MailApp.sendEmail(notifyTargets, emailSubject, emailBody);
+      lastAlarmCell.setNote("NOTIFIED");
+    } catch(e) {
+      Logger.log("Email dispatch failed: " + e.toString());
+    }
+  }
+  else if ((alarmStatus === 0 || alarmStatus === "0" || alarmStatus === "CLEAR") && previousNote === "NOTIFIED") {
+    var clearSubject = "✅ CVEWS RESOLVED";
+    var clearBody = "💚 SYSTEM CLEAR / BACK TO NORMAL\n" +
+                    "Cleared At: " + formattedTime + "\n\n" +
+                    "• Sm Tank: " + tk_sm + " Gal\n" +
+                    "• Lg Tank: " + tk_lg + " Gal\n" +
+                    "• Flow: " + flow + " GPM\n" +
+                    "System monitoring continuing normally.";
+                    
+    try {
+      MailApp.sendEmail(notifyTargets, clearSubject, clearBody);
+      previousAlarmCell.clearNote();
+    } catch(e) {
+      Logger.log("Email dispatch failed: " + e.toString());
+    }
+  }
+}
+
+// ==========================================
+// 3. TOTALIZER INTEGRATION CODE ENGINE
+// ==========================================
+function getGallonsPumpedOverHours(hours) {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("Sheet1");
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return 0;
+
+  var now = new Date();
+  var cutoffTime = new Date(now.getTime() - (hours * 60 * 60 * 1000));
+  
+  var maxRowsToRead = Math.min(lastRow - 1, hours * 65); 
+  var startRow = lastRow - maxRowsToRead + 1;
+  
+  var timestamps = sheet.getRange(startRow, 1, maxRowsToRead, 1).getValues();
+  var flowRates = sheet.getRange(startRow, 4, maxRowsToRead, 1).getValues();
+  
+  var totalGallons = 0;
+
+  for (var i = timestamps.length - 1; i >= 0; i--) {
+    var rowTime = new Date(timestamps[i][0]);
+    if (rowTime >= cutoffTime) {
+      var gpm = parseFloat(flowRates[i][0]) || 0;
+      totalGallons += gpm; 
+    } else {
+      break; 
+    }
+  }
+  return Math.round(totalGallons);
+}
+
+// ==========================================
+// 4. WEBPAGE API ENTRANCE (GET METHOD)
+// ==========================================
+function doGet() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("Sheet1");
+  var lastRow = sheet.getLastRow();
+  
+  if (lastRow < 2) {
+    return ContentService.createTextOutput(JSON.stringify({ error: "No data available" })).setMimeType(ContentService.MimeType.JSON);
+  }
+
+  var now = new Date();
+  var cutoffTime24h = new Date(now.getTime() - (24 * 60 * 60 * 1000));
+  var cutoffTime30d = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
+  
+  var maxRowsToRead = Math.min(lastRow - 1, 50000); 
+  var startRow = lastRow - maxRowsToRead + 1;
+  var dataRange = sheet.getRange(startRow, 1, maxRowsToRead, 12).getValues();
+
+  var w1Mins = 0, w3Mins = 0, w4Mins = 0, w5Mins = 0, p1Mins = 0, p2Mins = 0;
+  var smallTankValues = [];
+  var largeTankValues = [];
+
+  var alarmTrippedCount = 0;
+  var inAlarmState = false;
+
+  for (var i = 0; i < dataRange.length; i++) {
+    var rowTime = new Date(dataRange[i][0]);
+    
+    if (rowTime >= cutoffTime30d) {
+      var almStatus = dataRange[i][11];
+      var isRowTripped = (almStatus === 1 || almStatus === "1" || almStatus === true || almStatus === "TRIPPED");
+      
+      if (isRowTripped) {
+        if (!inAlarmState) {
+          alarmTrippedCount++;
+          inAlarmState = true;
+        }
+      } else {
+        inAlarmState = false;
+      }
+    }
+
+    if (rowTime >= cutoffTime24h) {
+      if (dataRange[i][5] === 1)  w1Mins++;
+      if (dataRange[i][6] === 1)  w3Mins++;
+      if (dataRange[i][7] === 1)  w4Mins++;
+      if (dataRange[i][8] === 1)  w5Mins++;
+      if (dataRange[i][9] === 1)  p1Mins++;
+      if (dataRange[i][10] === 1) p2Mins++;
+
+      var smVal = Number(dataRange[i][1]);
+      var lgVal = Number(dataRange[i][2]);
+      if (!isNaN(smVal) && smVal > 0) smallTankValues.push(smVal);
+      if (!isNaN(lgVal) && lgVal > 0) largeTankValues.push(lgVal);
+    }
+  }
+
+  var currentSmall = sheet.getRange(lastRow, 2).getValue();
+  var currentLarge = sheet.getRange(lastRow, 3).getValue();
+  
+  var smMin = smallTankValues.length ? Math.min.apply(null, smallTankValues) : currentSmall;
+  var smMax = smallTankValues.length ? Math.max.apply(null, smallTankValues) : currentSmall;
+  var lgMin = largeTankValues.length ? Math.min.apply(null, largeTankValues) : currentLarge;
+  var lgMax = largeTankValues.length ? Math.max.apply(null, largeTankValues) : currentLarge;
+  
+  var data = {
+    "timestamp": Utilities.formatDate(new Date(sheet.getRange(lastRow, 1).getValue()), Session.getScriptTimeZone(), "MM/dd HH:mm:ss"),
+    "tk_sm":     currentSmall,
+    "tk_lg":     currentLarge,
+    "flow":      sheet.getRange(lastRow, 4).getValue(),
+    "cl2":       sheet.getRange(lastRow, 5).getValue(),
+    "pumped_1h":  getGallonsPumpedOverHours(1),
+    "pumped_6h":  getGallonsPumpedOverHours(6),
+    "pumped_12h": getGallonsPumpedOverHours(12),
+    "pumped_24h": getGallonsPumpedOverHours(24),
+    "w1_24h": (w1Mins / 60).toFixed(1),
+    "w3_24h": (w3Mins / 60).toFixed(1),
+    "w4_24h": (w4Mins / 60).toFixed(1),
+    "w5_24h": (w5Mins / 60).toFixed(1),
+    "p1_24h": (p1Mins / 60).toFixed(1),
+    "p2_24h": (p2Mins / 60).toFixed(1),
+    "sm_min": Math.round(smMin),
+    "sm_max": Math.round(smMax),
+    "lg_min": Math.round(lgMin),
+    "lg_max": Math.round(lgMax),
+    "alarm_30d_count": alarmTrippedCount
+  };
+  
+  return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);
+}
+
+// ==========================================
+// 5A. COMPILER ENGINE (Run at 11:59 PM PST)
+// ==========================================
+function compileDailyReportData() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var sheet = ss.getSheetByName("Sheet1");
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) return;
+
+  var now = new Date();
+  var cutoffTime = new Date(now.getTime() - (24 * 60 * 60 * 1000));
+  
+  var maxRowsToRead = Math.min(lastRow - 1, 1500); 
+  var startRow = lastRow - maxRowsToRead + 1;
+  var dataRange = sheet.getRange(startRow, 1, maxRowsToRead, 12).getValues();
+  
+  var totalGallons = 0;
+  var minutesW1 = 0, minutesW3 = 0, minutesW4 = 0, minutesW5 = 0;
+  var minutesP1 = 0, minutesP2 = 0;
+  var actualRowsAnalyzed = 0;
+
+  for (var i = dataRange.length - 1; i >= 0; i--) {
+    var rowTime = new Date(dataRange[i][0]);
+    if (rowTime >= cutoffTime) {
+      actualRowsAnalyzed++;
+      totalGallons += (parseFloat(dataRange[i][3]) || 0);
+      if (dataRange[i][5] === 1)  minutesW1++;
+      if (dataRange[i][6] === 1)  minutesW3++;
+      if (dataRange[i][7] === 1)  minutesW4++;
+      if (dataRange[i][8] === 1)  minutesW5++;
+      if (dataRange[i][9] === 1)  minutesP1++;
+      if (dataRange[i][10] === 1) minutesP2++;
+    } else {
+      break;
+    }
+  }
+
+  var cacheSheet = ss.getSheetByName("ReportCache");
+  if (!cacheSheet) {
+    cacheSheet = ss.insertSheet("ReportCache");
+  }
+  cacheSheet.clear();
+  
+  var dateString = Utilities.formatDate(now, "PST", "MM/dd/yyyy");
+  
+  cacheSheet.appendRow([
+    dateString, totalGallons, actualRowsAnalyzed,
+    minutesW1, minutesW3, minutesW4, minutesW5,
+    minutesP1, minutesP2
+  ]);
+}
+
+// ==========================================
+// 5B. DISPATCHER ENGINE (Run at 1:00 AM PST)
+// ==========================================
+function dispatchDailyReportEmail() {
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var cacheSheet = ss.getSheetByName("ReportCache");
+  
+  if (!cacheSheet || cacheSheet.getLastRow() < 1) return;
+  
+  var cachedData = cacheSheet.getRange(1, 1, 1, 9).getValues()[0];
+  var dateString      = cachedData[0];
+  var totalGallons    = cachedData[1];
+  var rowsAnalyzed    = cachedData[2];
+  var minutesW1       = cachedData[3];
+  var minutesW3       = cachedData[4];
+  var minutesW4       = cachedData[5];
+  var minutesW5       = cachedData[6];
+  var minutesP1       = cachedData[7];
+  var minutesP2       = cachedData[8];
+
+  var recipientSheet = ss.getSheetByName("Report Recipients");
+  var notifyTargets = "";
+  if (recipientSheet && recipientSheet.getLastRow() >= 1) {
+    notifyTargets = recipientSheet.getRange(1, 1, recipientSheet.getLastRow(), 1)
+                                  .getValues()
+                                  .map(function(r) { return r[0] ? r[0].toString().trim() : ""; })
+                                  .filter(function(e) { return e.length > 0; })
+                                  .join(", ");
+  }
+
+  if (!notifyTargets) return;
+
+  var subject = "📊 CVEWS Facility Daily Report - " + dateString;
+  var body = "🛠️ CVEWS 24-HOUR FACILITY PERFORMANCE REPORT\n" +
+             "Report Date: " + dateString + "\n" +
+             "=========================================\n\n" +
+             "💧 VOLUMETRIC YIELD:\n" +
+             "• Total Water Pumped: " + Math.round(totalGallons).toLocaleString() + " Gallons\n\n" +
+             "🔌 WELL RUNTIMES:\n" +
+             "• Well 1: " + (minutesW1 / 60).toFixed(1) + " Hours (" + minutesW1 + " mins)\n" +
+             "• Well 3: " + (minutesW3 / 60).toFixed(1) + " Hours (" + minutesW3 + " mins)\n" +
+             "• Well 4: " + (minutesW4 / 60).toFixed(1) + " Hours (" + minutesW4 + " mins)\n" +
+             "• Well 5: " + (minutesW5 / 60).toFixed(1) + " Hours (" + minutesW5 + " mins)\n\n" +
+             "⚙️ BOOSTER PUMP RUNTIMES:\n" +
+             "• 7.5hp Booster (P1): " + (minutesP1 / 60).toFixed(1) + " Hours (" + minutesP1 + " mins)\n" +
+             "• 5.0hp Booster (P2): " + (minutesP2 / 60).toFixed(1) + " Hours (" + minutesP2 + " mins)\n\n" +
+             "📝 System Metrics:\n" +
+             "• Total Data Points Analyzed: " + rowsAnalyzed + "\n" +
+             "• Live Control Room Dashboard: https://htijohnson.github.io/CVEWS/\n\n" +
+             "Report compiled at 11:59 PM PST and dispatched via automated sequence.";
+
+  MailApp.sendEmail(notifyTargets, subject, body);
+  cacheSheet.clear();
+}

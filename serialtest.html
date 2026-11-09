@@ -4,7 +4,6 @@
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>PLC Telemetry Dashboard</title>
-  <!-- MQTT over WebSocket Library -->
   <script src="https://cdnjs.cloudflare.com/ajax/libs/paho-mqtt/1.0.1/mqttws31.min.js"></script>
   <style>
     * {
@@ -53,9 +52,9 @@
       width: 10px;
       height: 10px;
       border-radius: 50%;
-      background: #ef4444; /* red default */
+      background: #ef4444;
     }
-    .dot.connected { background: #22c55e; } /* green */
+    .dot.connected { background: #22c55e; }
     .grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
@@ -143,26 +142,22 @@
     </header>
 
     <div class="grid">
-      <!-- ESP32 Online State -->
       <div class="card">
         <div class="card-label">ESP32 Status</div>
         <div class="card-value" id="valEspStatus">--</div>
       </div>
 
-      <!-- Local IP Address -->
       <div class="card">
         <div class="card-label">ESP32 Local IP</div>
         <div class="card-value" id="valIp">--</div>
       </div>
 
-      <!-- Latest Raw PLC Payload -->
       <div class="card" style="grid-column: 1 / -1;">
         <div class="card-label">Latest PLC Raw Telemetry (plc/data/raw)</div>
         <div class="card-value" id="valPlcData" style="color: #38bdf8;">Waiting for data...</div>
       </div>
     </div>
 
-    <!-- Live Terminal Log -->
     <div class="terminal-card">
       <div class="terminal-header">
         <span>MQTT INCOMING FEED</span>
@@ -173,11 +168,11 @@
   </div>
 
   <script>
-    // --- HiveMQ WebSocket Connection Settings ---
     const host = "91edf0b43131429b9a2d60d852310ada.s1.eu.hivemq.cloud";
     const port = 8884;
     const path = "/mqtt";
-    const username = "cviewstelemetrySUB";
+    // Using the verified username without the extra 'i'
+    const username = "cvewstelemetry1";
     const password = "water123";
 
     const clientId = "WebClient-" + Math.random().toString(16).substr(2, 8);
@@ -195,7 +190,7 @@
       statusDot.classList.remove("connected");
       statusText.innerText = "Disconnected";
       addLog("System", "Connection lost: " + responseObject.errorMessage);
-      setTimeout(connectClient, 5000); // Reconnect automatically
+      setTimeout(connectClient, 5000);
     };
 
     client.onMessageArrived = (message) => {
@@ -216,41 +211,3 @@
     function connectClient() {
       statusText.innerText = "Connecting...";
       client.connect({
-        useSSL: true,
-        userName: username,
-        password: password,
-        onSuccess: () => {
-          statusDot.classList.add("connected");
-          statusText.innerText = "Broker Connected";
-          addLog("System", "Connected to HiveMQ Cloud via WSS");
-          
-          // Subscribe to all topics under plc/
-          client.subscribe("plc/#");
-        },
-        onFailure: (err) => {
-          statusDot.classList.remove("connected");
-          statusText.innerText = "Auth/Conn Failed";
-          addLog("System", "Connection failed: " + err.errorMessage);
-          setTimeout(connectClient, 5000);
-        }
-      });
-    }
-
-    function addLog(topic, msg) {
-      const now = new Date().toLocaleTimeString();
-      const div = document.createElement("div");
-      div.className = "log-item";
-      div.innerHTML = `<span class="log-time">[${now}]</span> <strong>${topic}:</strong> ${msg}`;
-      logBox.appendChild(div);
-      logBox.scrollTop = logBox.scrollHeight;
-    }
-
-    function clearLog() {
-      logBox.innerHTML = "";
-    }
-
-    // Connect immediately on load
-    connectClient();
-  </script>
-</body>
-</html>

@@ -1,0 +1,220 @@
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <PubSubClient.h>
+#include <WebServer.h>
+#include <time.h>
+
+// --- WiFi Configuration ---
+const char* ssid     = "HTiCenCom";
+const char* password = "headtrauma111";
+
+// --- HiveMQ Cloud Configuration ---
+const char* mqtt_server   = "91edf0b43131429b9a2d60d852310ada.s1.eu.hivemq.cloud";
+const int   mqtt_port     = 8883;
+const char* mqtt_user     = "cvewstelemetry1";
+const char* mqtt_password = "water123";
+
+// --- MQTT Topics ---
+const char* topic_ip     = "plc/esp32/ip";
+const char* topic_status = "plc/esp32/status";
+const char* topic_data   = "plc/data/raw";
+
+// --- Pins on ESP32-C3 SuperMini ---
+#define RX1_PIN 20  // Connect to MAX3232 TXD
+#define TX1_PIN 21  // Connect to MAX3232 RXD
+
+WiFiClientSecure espClient;
+PubSubClient client(espClient);
+WebServer server(80);
+
+// --- Timers ---
+unsigned long lastDashboardPublish = 0;
+const unsigned long dashboardInterval = 3000; // Heartbeat every 3s
+
+unsigned long lastPollTime = 0;
+const unsigned long pollInterval = 1000;      // Send poll query every 1s
+const char* pollCommand = "?\r\n";
+
+// --- Global Status Variables ---
+String latestPlcRaw = "Waiting for serial data...";
+unsigned long lastPlcRxTime = 0;
+
+// Bit registers for I/O modules (8 bits each)
+uint8_t slot1_outputs = 0x00; // Y000 - Y007
+uint8_t slot2_inputs  = 0x00; // X010 - X017
+uint8_t slot3_inputs  = 0x00; // X020 - X027
+
+// --- Parse Received Serial Data ---
+void parsePlcData(String payload) {
+  latestPlcRaw = payload;
+  lastPlcRxTime = millis();
+
+  // Try extracting hex/decimal numbers if formatted as IN=value or comma-separated
+  // Example formats handled: "0x12,0x34" or standard integer values
+  int inIdx = payload.indexOf("IN=");
+  if (inIdx >= 0) {
+    slot2_inputs = payload.substring(inIdx + 3).toInt();
+  }
+  int outIdx = payload.indexOf("OUT=");
+  if (outIdx >= 0) {
+    slot1_outputs = payload.substring(outIdx + 4).toInt();
+  }
+}
+
+// --- Serve Local Web Page ---
+void handleRoot() {
+  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'>";
+  html += "<meta name='viewport' content='width=device-width,initial-scale=1.0'>";
+  html += "<meta http-equiv='refresh' content='2'>"; // Auto-refresh every 2 seconds
+  html += "<title>ESP32 Local PLC Monitor</title>";
+  html += "<style>";
+  html += "body{font-family:sans-serif;background:#0f172a;color:#f8fafc;padding:20px;margin:0;}";
+  html += ".card{background:#1e293b;border:1px solid #334155;border-radius:8px;padding:16px;margin-bottom:16px;max-width:700px;margin-left:auto;margin-right:auto;}";
+  html += "h2{margin-top:0;font-size:1.2rem;color:#38bdf8;}";
+  html += ".grid{display:grid;grid-template-columns:repeat(8,1fr);gap:6px;text-align:center;margin-top:8px;}";
+  html += ".bit-box{padding:8px 4px;border-radius:4px;font-size:0.75rem;font-weight:bold;}";
+  html += ".on{background:#22c55e;color:#052e16;}";
+  html += ".off{background:#334155;color:#94a3b8;}";
+  html += ".raw{font-family:monospace;background:#020617;padding:10px;border-radius:4px;color:#38bdf8;word-break:break-all;}";
+  html += "</style></head><body>";
+  
+  html += "<div class='card'>";
+  html += "<h2>ESP32 Node Status</h2>";
+  html += "<p><strong>Local IP:</strong> " + WiFi.localIP().toString() + "</p>";
+  html += "<p><strong>MQTT Broker:</strong> " + String(client.connected() ? "<span style='color:#22c55e;'>CONNECTED</span>" : "<span style='color:#ef4444;'>DISCONNECTED</span>") + "</p>";
+  html += "<p><strong>Uptime:</strong> " + String(millis() / 1000) + " s</p>";
+  html += "</div>";
+
+  html += "<div class='card'>";
+  html += "<h2>Slot 1: Outputs (Y000 - Y007)</h2>";
+  html += "<div class='grid'>";
+  for (int i = 0; i < 8; i++) {
+    bool state = (slot1_outputs >> i) & 0x01;
+    html += "<div class='bit-box " + String(state ? "on" : "off") + "'>Y00" + String(i) + "<br>" + (state ? "ON" : "OFF") + "</div>";
+  }
+  html += "</div></div>";
+
+  html += "<div class='card'>";
+  html += "<h2>Slot 2: Inputs (X010 - X017)</h2>";
+  html += "<div class='grid'>";
+  for (int i = 0; i < 8; i++) {
+    bool state = (slot2_inputs >> i) & 0x01;
+    html += "<div class='bit-box " + String(state ? "on" : "off") + "'>X01" + String(i) + "<br>" + (state ? "ON" : "OFF") + "</div>";
+  }
+  html += "</div></div>";
+
+  html += "<div class='card'>";
+  html += "<h2>Slot 3: Inputs (X020 - X027)</h2>";
+  html += "<div class='grid'>";
+  for (int i = 0; i < 8; i++) {
+    bool state = (slot3_inputs >> i) & 0x01;
+    html += "<div class='bit-box " + String(state ? "on" : "off") + "'>X02" + String(i) + "<br>" + (state ? "ON" : "OFF") + "</div>";
+  }
+  html += "</div></div>";
+
+  html += "<div class='card'>";
+  html += "<h2>Latest Serial Stream</h2>";
+  html += "<div class='raw'>" + latestPlcRaw + "</div>";
+  html += "</div>";
+
+  html += "</body></html>";
+  server.send(200, "text/html", html);
+}
+
+void connectWiFi() {
+  Serial.print("Connecting to WiFi: ");
+  Serial.println(ssid);
+  WiFi.mode(WIFI_STA);
+  WiFi.begin(ssid, password);
+
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+
+  Serial.println("\nWiFi connected!");
+  Serial.print("ESP32 Local IP: ");
+  Serial.println(WiFi.localIP());
+
+  configTime(0, 0, "pool.ntp.org");
+}
+
+void reconnectMQTT() {
+  while (!client.connected()) {
+    Serial.print("Attempting MQTT connection to HiveMQ...");
+    String clientId = "ESP32_C3_Client-" + String(random(0xffff), HEX);
+
+    if (client.connect(clientId.c_str(), mqtt_user, mqtt_password)) {
+      Serial.println(" CONNECTED!");
+      
+      client.publish(topic_status, "online", true);
+      String ipAddress = WiFi.localIP().toString();
+      client.publish(topic_ip, ipAddress.c_str(), true);
+    } else {
+      Serial.print(" failed, rc=");
+      Serial.print(client.state());
+      Serial.println(" - Retrying in 4s...");
+      delay(4000);
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+
+  // Initialize UART1 for MAX3232 to PLC
+  Serial1.begin(9600, SERIAL_8N1, RX1_PIN, TX1_PIN);
+
+  espClient.setInsecure();
+  client.setServer(mqtt_server, mqtt_port);
+
+  connectWiFi();
+
+  // Start internal HTTP server
+  server.on("/", handleRoot);
+  server.begin();
+  Serial.println("Local HTTP Web Server active at http://" + WiFi.localIP().toString());
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) {
+    connectWiFi();
+  }
+
+  if (!client.connected()) {
+    reconnectMQTT();
+  }
+  client.loop();
+  server.handleClient(); // Handle local web dashboard visits
+
+  // Heartbeat publish to HiveMQ every 3 seconds
+  if (millis() - lastDashboardPublish >= dashboardInterval) {
+    lastDashboardPublish = millis();
+    String ipStr = WiFi.localIP().toString();
+    client.publish(topic_ip, ipStr.c_str(), true);
+    client.publish(topic_status, "online", true);
+  }
+
+  // Polling query loop
+  if (millis() - lastPollTime >= pollInterval) {
+    lastPollTime = millis();
+    Serial1.print(pollCommand);
+  }
+
+  // Read incoming response from PLC
+  if (Serial1.available()) {
+    String incomingPayload = Serial1.readStringUntil('\n');
+    incomingPayload.trim();
+
+    if (incomingPayload.length() > 0) {
+      Serial.print("Received from PLC: ");
+      Serial.println(incomingPayload);
+
+      // Parse status bits and update local page
+      parsePlcData(incomingPayload);
+
+      // Forward to MQTT broker
+      client.publish(topic_data, incomingPayload.c_str());
+    }
+  }
+}

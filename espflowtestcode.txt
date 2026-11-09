@@ -1,0 +1,626 @@
+#include <WiFi.h>
+#include <WiFiClientSecure.h>
+#include <HTTPClient.h>
+#include <PubSubClient.h>
+#include <ModbusMaster.h>
+#include <ArduinoJson.h>
+#include <WebServer.h>
+#include <Update.h>
+#include <ESPmDNS.h>
+#include "time.h"
+#include "mbedtls/aes.h"
+
+// Firmware Version
+const char* current_firmware_version = "1.0.4";
+
+// Wi-Fi Credentials
+const char* WIFI_SSID = "HTiCenCom";
+const char* WIFI_PASS = "headtrauma111";
+
+// Google Apps Script Web App Deployment URL
+const char* GOOGLE_SCRIPT_URL = "https://script.google.com/macros/s/AKfycby0tMJYWzvQIr-bqjViqPL8Fs4qridwhoOxA5ZrIZUefblbCPiikQe7u7Zhk8N03dQ/exec";
+
+// HiveMQ Cloud Credentials
+const char* MQTT_SERVER   = "91edf0b43131429b9a2d60d852310ada.s1.eu.hivemq.cloud";
+const int   MQTT_PORT     = 8883;
+const char* MQTT_USER     = "cvewstelemetry";
+const char* MQTT_PASS     = "Water123!";
+const char* MQTT_TOPIC    = "CVEWS/telemetry/live";
+const char* MQTT_TOPIC_STATUS = "tuf2000b/status";
+const char* MQTT_TOPIC_CMD    = "tuf2000b/cmd";
+
+// GitHub OTA URLs
+const char* github_version_url  = "https://htijohnson.github.io/CVEWS/firmware/version.txt";
+const char* github_firmware_url = "https://htijohnson.github.io/CVEWS/firmware/firmware.bin";
+
+// NTP Server & Pacific Timezone String (Handles PST/PDT automatically)
+const char* ntpServer = "pool.ntp.org";
+const char* timezoneString = "PST8PDT,M3.2.0,M11.1.0";
+
+// AES-256 Secret Key & IV for Encrypted OTA
+const uint8_t aes_key[32] = {
+  0x60, 0x3D, 0xEB, 0x10, 0x15, 0xCA, 0x71, 0xBE,
+  0x2B, 0x73, 0xAE, 0xF0, 0x85, 0x7D, 0x77, 0x81,
+  0x1F, 0x35, 0x2C, 0x07, 0x3B, 0x61, 0x08, 0xD7,
+  0x2D, 0x98, 0x10, 0xA3, 0x09, 0x14, 0xDF, 0xF4
+};
+
+const uint8_t aes_iv[16] = {
+  0x00, 0x01, 0x02, 0x03, 0x04, 0x05, 0x06, 0x07,
+  0x08, 0x09, 0x0A, 0x0B, 0x0C, 0x0D, 0x0E, 0x0F
+};
+
+// Hardware Pin Definitions (ESP32-C3 SuperMini Header Compatible)
+#define PIN_CL2   4   // Chlorine Analyzer (4-20mA across 150Ω)
+#define PIN_TK_SM 1   // Lower Tank Level (4-20mA across 150Ω)
+#define PIN_TK_LG 2   // Upper Tank Level (4-20mA across 150Ω)
+
+#define PIN_ALM   3   // Alarm Light Dry Contact Input (Active LOW to GND)
+#define PIN_P1    5   // 7.5hp Booster (P1)
+#define PIN_W3    0   // Well 3
+#define PIN_W4    6   // Well 4
+#define PIN_W5    7   // Well 5
+#define PIN_P2    9   // 5hp Booster (P2)
+
+// Modbus Hardware Pins
+#define RX_PIN    20  // RX -> MAX485 RO
+#define TX_PIN    21  // TX -> MAX485 DI
+#define MAX485_DE 10  // MAX485 DE & RE (Retained on GPIO 10)
+#define LED_PIN   8   // Onboard Status LED
+
+WiFiClientSecure net;
+PubSubClient mqttClient(net);
+ModbusMaster node;
+WebServer server(80);
+
+// Timers
+unsigned long lastMqttPub = 0;
+unsigned long lastGScriptPost = 0;
+unsigned long lastOtaCheck = 0;
+unsigned long previousMillis = 0;
+const long blinkInterval = 500;
+bool ledState = HIGH;
+
+// Alarm State Tracking (> 30s timer & latch)
+unsigned long alarmActiveStartTime = 0;
+bool alarmSmsSent = false;
+
+// Noon Test Tracking
+int lastNoonTestDay = -1;
+
+// Modbus State Variables
+float currentFlowRate = 0.0;
+float currentTotalFlow = 0.0;
+bool lastModbusSuccess = false;
+bool otaRequestedViaMqtt = false;
+
+// RS485 Control Callbacks
+void preTransmission() { 
+  digitalWrite(MAX485_DE, HIGH); 
+  delayMicroseconds(200);
+}
+
+void postTransmission() { 
+  delayMicroseconds(200);
+  digitalWrite(MAX485_DE, LOW); 
+}
+
+float registersToFloat(uint16_t reg0, uint16_t reg1) {
+  uint32_t combined = ((uint32_t)reg1 << 16) | reg0; 
+  float result;
+  memcpy(&result, &combined, sizeof(result));
+  return result;
+}
+
+float readAnalogSensor(uint8_t pin, float minVal, float maxVal) {
+  uint32_t sum = 0;
+  for (int i = 0; i < 16; i++) {
+    sum += analogRead(pin);
+    delay(2);
+  }
+  float adcAvg = sum / 16.0;
+  float scaled = ((adcAvg - 745.0) / (3722.0 - 745.0)) * (maxVal - minVal) + minVal;
+  return constrain(scaled, minVal, maxVal);
+}
+
+void readModbusData() {
+  node.clearResponseBuffer();
+  uint8_t flowResult = node.readHoldingRegisters(0x0000, 2);
+  float flowRate = 0.0;
+  bool flowOk = false;
+
+  if (flowResult == node.ku8MBSuccess) {
+    flowRate = registersToFloat(node.getResponseBuffer(0), node.getResponseBuffer(1));
+    flowOk = true;
+  }
+
+  delay(50);
+
+  node.clearResponseBuffer();
+  uint8_t totalResult = node.readHoldingRegisters(0x0008, 2);
+  float totalFlow = 0.0;
+  bool totalOk = false;
+
+  if (totalResult == node.ku8MBSuccess) {
+    totalFlow = registersToFloat(node.getResponseBuffer(0), node.getResponseBuffer(1));
+    if (totalFlow < 0.00001f && totalFlow > 0.0f) {
+      totalFlow = 0.0f;
+    }
+    totalOk = true;
+  }
+
+  if (flowOk) currentFlowRate = flowRate;
+  if (totalOk) currentTotalFlow = totalFlow;
+
+  lastModbusSuccess = flowOk;
+}
+
+// Read dry contact on GPIO 3 with debounce
+int readAlarmDryContact() {
+  if (digitalRead(PIN_ALM) == LOW) {
+    delay(20);
+    if (digitalRead(PIN_ALM) == LOW) {
+      return 1; // Closed to GND -> Alarm Active/Tripped
+    }
+  }
+  return 0;   // Open -> Clear
+}
+
+// Generic POST dispatcher to trigger SMS actions in Google Apps Script
+void sendScriptSmsAction(const char* actionName, const char* alertText) {
+  if (WiFi.status() != WL_CONNECTED) {
+    Serial.println("[SMS Alert] WiFi disconnected, unable to trigger SMS.");
+    return;
+  }
+
+  Serial.printf("[SMS Alert] Dispatching action '%s'...\n", actionName);
+
+  WiFiClientSecure gClient;
+  gClient.setInsecure();
+
+  HTTPClient http;
+  http.begin(gClient, GOOGLE_SCRIPT_URL);
+  http.addHeader("Content-Type", "application/json");
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+  http.setTimeout(10000);
+
+  StaticJsonDocument<256> alertDoc;
+  alertDoc["action"] = actionName;
+  alertDoc["message"] = alertText;
+
+  char buffer[256];
+  serializeJson(alertDoc, buffer);
+
+  int httpResponseCode = http.POST(buffer);
+  Serial.printf("[SMS Alert] Response Code: %d\n", httpResponseCode);
+  http.end();
+}
+
+// Check alarm duration and trigger SMS if tripped continuously > 30s
+void processAlarmTimer() {
+  int isAlarmTripped = readAlarmDryContact();
+
+  if (isAlarmTripped == 1) {
+    if (alarmActiveStartTime == 0) {
+      alarmActiveStartTime = millis();
+    } else {
+      if (!alarmSmsSent && (millis() - alarmActiveStartTime >= 30000)) {
+        sendScriptSmsAction("alarm_sms", "🚨 CVEWS CRITICAL ALERT: The System Alarm Light has been ACTIVE for over 30 seconds! Check telemetry dashboard: https://htijohnson.github.io/CVEWS/");
+        alarmSmsSent = true; 
+      }
+    }
+  } else {
+    alarmActiveStartTime = 0;
+    alarmSmsSent = false;
+  }
+}
+
+// Evaluates system clock daily and triggers a noon SMS
+void checkDailyNoonTest() {
+  struct tm timeinfo;
+  if (!getLocalTime(&timeinfo)) {
+    return; // Clock not yet synced with NTP
+  }
+
+  // Trigger test if hour == 12 (12:00 PM) and hasn't run yet today
+  if (timeinfo.tm_hour == 12 && lastNoonTestDay != timeinfo.tm_mday) {
+    Serial.println("[Daily Test] It is 12:00 PM PST. Triggering daily test SMS...");
+    
+    char dateBuf[64];
+    strftime(dateBuf, sizeof(dateBuf), "%m/%d/%Y at %I:%M %p", &timeinfo);
+    
+    String msg = "CVEWS DAILY SYSTEM TEST: Telemetry system operational. Local time: " + String(dateBuf) + ". Dashboard: https://htijohnson.github.io/CVEWS/";
+    sendScriptSmsAction("daily_test_sms", msg.c_str());
+    
+    lastNoonTestDay = timeinfo.tm_mday; // Latch to today's date
+  }
+}
+
+StaticJsonDocument<384> buildTelemetryPayload() {
+  StaticJsonDocument<384> doc;
+
+  doc["tk_sm"] = readAnalogSensor(PIN_TK_SM, 0.0, 4100.0);
+  doc["tk_lg"] = readAnalogSensor(PIN_TK_LG, 0.0, 71000.0);
+  doc["cl2"]   = readAnalogSensor(PIN_CL2, 0.0, 2.00);
+  
+  float gpm = (currentFlowRate * 264.172) / 60.0;
+  doc["flow"]  = lastModbusSuccess ? gpm : 0.0;
+
+  // Digital Inputs
+  doc["w1"]  = 0;
+  doc["w3"]  = (digitalRead(PIN_W3) == LOW) ? 1 : 0;
+  doc["w4"]  = (digitalRead(PIN_W4) == LOW) ? 1 : 0;
+  doc["w5"]  = (digitalRead(PIN_W5) == LOW) ? 1 : 0;
+  doc["p1"]  = (digitalRead(PIN_P1) == LOW) ? 1 : 0;
+  doc["p2"]  = (digitalRead(PIN_P2) == LOW) ? 1 : 0;
+
+  // Alarm Light Dry Contact (1 = Tripped, 0 = Clear)
+  doc["alm"] = readAlarmDryContact();
+
+  doc["ip"]      = WiFi.localIP().toString();
+  doc["version"] = current_firmware_version;
+
+  return doc;
+}
+
+// Encrypted GitHub OTA Engine
+bool checkAndPerformGithubOTA() {
+  Serial.println("[OTA] Checking GitHub for firmware updates...");
+  mqttClient.publish(MQTT_TOPIC_STATUS, "ota_checking");
+
+  WiFiClientSecure otaClient;
+  otaClient.setInsecure();
+
+  HTTPClient http;
+  http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+
+  if (!http.begin(otaClient, github_version_url)) {
+    Serial.println("[OTA] Failed to connect to version URL.");
+    mqttClient.publish(MQTT_TOPIC_STATUS, "ota_failed_conn");
+    return false;
+  }
+
+  int httpCode = http.GET();
+  if (httpCode != HTTP_CODE_OK) {
+    Serial.printf("[OTA] Version HTTP failed: %d\n", httpCode);
+    http.end();
+    mqttClient.publish(MQTT_TOPIC_STATUS, "ota_failed_version_http");
+    return false;
+  }
+
+  String remoteVersion = http.getString();
+  remoteVersion.trim();
+  remoteVersion.replace("\r", "");
+  remoteVersion.replace("\n", "");
+  http.end();
+
+  if (remoteVersion.equals(String(current_firmware_version))) {
+    Serial.println("[OTA] Firmware is already up to date.");
+    mqttClient.publish(MQTT_TOPIC_STATUS, "ota_up_to_date");
+    return false;
+  }
+
+  Serial.println("[OTA] New version found! Downloading encrypted binary...");
+  mqttClient.publish(MQTT_TOPIC_STATUS, "ota_downloading");
+
+  if (!http.begin(otaClient, github_firmware_url)) {
+    Serial.println("[OTA] Failed to connect to binary URL.");
+    mqttClient.publish(MQTT_TOPIC_STATUS, "ota_failed_bin_conn");
+    return false;
+  }
+
+  httpCode = http.GET();
+  if (httpCode != HTTP_CODE_OK) {
+    Serial.printf("[OTA] Binary download failed: %d\n", httpCode);
+    http.end();
+    mqttClient.publish(MQTT_TOPIC_STATUS, "ota_failed_bin_http");
+    return false;
+  }
+
+  int contentLength = http.getSize();
+  if (contentLength <= 0 || !Update.begin(contentLength)) {
+    Serial.println("[OTA] Partition space allocation error.");
+    http.end();
+    mqttClient.publish(MQTT_TOPIC_STATUS, "ota_failed_space");
+    return false;
+  }
+
+  mbedtls_aes_context aes;
+  mbedtls_aes_init(&aes);
+  mbedtls_aes_setkey_dec(&aes, aes_key, 256);
+
+  uint8_t iv_buffer[16];
+  memcpy(iv_buffer, aes_iv, 16);
+
+  WiFiClient* stream = http.getStreamPtr();
+  const size_t CHUNK_SIZE = 512;
+  uint8_t encryptedBuffer[CHUNK_SIZE];
+  uint8_t decryptedBuffer[CHUNK_SIZE];
+
+  size_t totalBytesWritten = 0;
+
+  while (http.connected() && (totalBytesWritten < contentLength)) {
+    size_t availableBytes = stream->available();
+    if (availableBytes > 0) {
+      size_t readLen = stream->readBytes(encryptedBuffer, min(availableBytes, CHUNK_SIZE));
+      size_t blocksLen = (readLen / 16) * 16;
+
+      if (blocksLen > 0) {
+        mbedtls_aes_crypt_cbc(&aes, MBEDTLS_AES_DECRYPT, blocksLen, iv_buffer, encryptedBuffer, decryptedBuffer);
+        size_t written = Update.write(decryptedBuffer, blocksLen);
+
+        if (written != blocksLen) {
+          mbedtls_aes_free(&aes);
+          http.end();
+          mqttClient.publish(MQTT_TOPIC_STATUS, "ota_flash_error");
+          return false;
+        }
+
+        totalBytesWritten += blocksLen;
+      }
+    }
+    delay(1);
+  }
+
+  mbedtls_aes_free(&aes);
+  http.end();
+
+  if (Update.end(true)) {
+    Serial.println("[OTA] Update successful! Rebooting...");
+    mqttClient.publish(MQTT_TOPIC_STATUS, "ota_success_rebooting");
+    delay(1000);
+    return true;
+  } else {
+    mqttClient.publish(MQTT_TOPIC_STATUS, "ota_failed_finalize");
+    return false;
+  }
+}
+
+// MQTT Listener
+void mqttCallback(char* topic, byte* payload, unsigned int length) {
+  String message = "";
+  for (unsigned int i = 0; i < length; i++) {
+    message += (char)payload[i];
+  }
+  message.trim();
+
+  if (String(topic) == MQTT_TOPIC_CMD) {
+    if (message.equalsIgnoreCase("UPDATE") || message.equalsIgnoreCase("OTA") || message.equalsIgnoreCase("CHECK")) {
+      otaRequestedViaMqtt = true;
+    }
+  }
+}
+
+void setupWiFi() {
+  Serial.print("[WiFi] Connecting to: ");
+  Serial.println(WIFI_SSID);
+  
+  WiFi.begin(WIFI_SSID, WIFI_PASS);
+  while (WiFi.status() != WL_CONNECTED) {
+    delay(500);
+    Serial.print(".");
+  }
+  
+  Serial.println("\n[WiFi] Connected!");
+  Serial.print("[WiFi] IP Address: ");
+  Serial.println(WiFi.localIP());
+
+  // Configure NTP time synchronization for Pacific Time
+  configTzTime(timezoneString, ntpServer);
+
+  if (MDNS.begin("cvews")) {
+    Serial.println("[mDNS] Responder started: http://cvews.local/");
+  }
+
+  net.setInsecure();
+}
+
+void reconnectMqtt() {
+  while (!mqttClient.connected()) {
+    String clientId = "ESP32_CVEWS_" + String(random(0xffff), HEX);
+    Serial.print("[MQTT] Connecting to HiveMQ...");
+    
+    if (mqttClient.connect(clientId.c_str(), MQTT_USER, MQTT_PASS, MQTT_TOPIC_STATUS, 1, true, "offline")) {
+      Serial.println(" Connected!");
+      mqttClient.publish(MQTT_TOPIC_STATUS, "online", true);
+      mqttClient.subscribe(MQTT_TOPIC_CMD);
+      break;
+    } else {
+      Serial.print(" Failed, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" Retrying in 3 seconds...");
+      delay(3000);
+    }
+  }
+}
+
+void sendGoogleSheetData(String jsonBuffer) {
+  if (WiFi.status() == WL_CONNECTED) {
+    WiFiClientSecure gClient;
+    gClient.setInsecure();
+    
+    HTTPClient http;
+    http.begin(gClient, GOOGLE_SCRIPT_URL);
+    http.addHeader("Content-Type", "application/json");
+    http.setFollowRedirects(HTTPC_STRICT_FOLLOW_REDIRECTS);
+    http.setTimeout(10000);
+    
+    int httpResponseCode = http.POST(jsonBuffer);
+    http.end();
+  }
+}
+
+// Local ESP32 Web Interface Root Page
+void handleRoot() {
+  StaticJsonDocument<384> doc = buildTelemetryPayload();
+  
+  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1.0'>";
+  html += "<meta http-equiv='refresh' content='3'>";
+  html += "<title>CVEWS Local ESP32 Control</title>";
+  html += "<style>body{font-family:sans-serif;background:#1a1e24;color:#e2e8f0;padding:20px;max-width:600px;margin:0 auto;}";
+  html += "h1{color:#63b3ed;border-bottom:2px solid #2d3748;padding-bottom:10px;}";
+  html += ".card{background:#232934;border:1px solid #2d3748;padding:15px;margin-bottom:10px;border-radius:6px;}";
+  html += ".status{font-weight:bold;color:#38a169;}.active{color:#e53e3e;}";
+  html += ".btn{display:inline-block;padding:8px 12px;background:#3182ce;color:#fff;text-decoration:none;border-radius:4px;font-weight:bold;margin-right:5px;margin-top:5px;}";
+  html += ".btn:hover{background:#2b6cb0;}</style></head><body>";
+  html += "<h1>CVEWS ESP32 Local Node</h1>";
+  html += "<div class='card'><h3>Local IP: http://" + WiFi.localIP().toString() + "/</h3>";
+  html += "<p>Firmware Version: <b>v" + String(current_firmware_version) + "</b></p>";
+  html += "<a href='/update' class='btn'>⚡ Browser OTA</a>";
+  html += "<a href='/update-github' class='btn'>☁️ GitHub OTA Check</a></div>";
+  
+  html += "<div class='card'><h3>Analog Instrumentation</h3>";
+  html += "<p>Small Tank: <strong>" + String((float)doc["tk_sm"], 0) + " GAL</strong></p>";
+  html += "<p>Large Tank: <strong>" + String((float)doc["tk_lg"], 0) + " GAL</strong></p>";
+  html += "<p>Chlorine Content: <strong>" + String((float)doc["cl2"], 2) + " mg/L</strong></p>";
+  html += "<p>Flow Rate (TUF-2000B): <strong>" + String((float)doc["flow"], 2) + " GPM</strong></p></div>";
+
+  html += "<div class='card'><h3>Relay States</h3>";
+  html += "<p>Well 3: " + String((int)doc["w3"] ? "<span class='status active'>RUNNING</span>" : "IDLE") + "</p>";
+  html += "<p>Well 4: " + String((int)doc["w4"] ? "<span class='status active'>RUNNING</span>" : "IDLE") + "</p>";
+  html += "<p>Well 5: " + String((int)doc["w5"] ? "<span class='status active'>RUNNING</span>" : "IDLE") + "</p>";
+  html += "<p>7.5hp Booster: " + String((int)doc["p1"] ? "<span class='status active'>RUNNING</span>" : "IDLE") + "</p>";
+  html += "<p>5hp Booster: " + String((int)doc["p2"] ? "<span class='status active'>RUNNING</span>" : "IDLE") + "</p>";
+  html += "<p>Alarm Light Input: " + String((int)doc["alm"] ? "<span class='status active'>TRIPPED</span>" : "CLEAR") + "</p></div>";
+  
+  html += "</body></html>";
+  server.send(200, "text/html", html);
+}
+
+void handleUpdatePage() {
+  String html = "<!DOCTYPE html><html><head><meta charset='UTF-8'><meta name='viewport' content='width=device-width, initial-scale=1.0'>";
+  html += "<title>CVEWS Local Firmware Update</title>";
+  html += "<style>body{font-family:sans-serif;background:#1a1e24;color:#e2e8f0;padding:20px;max-width:500px;margin:0 auto;}";
+  html += "h1{color:#63b3ed;border-bottom:2px solid #2d3748;padding-bottom:10px;}";
+  html += ".card{background:#232934;border:1px solid #2d3748;padding:20px;border-radius:6px;}";
+  html += "input[type='file']{margin:15px 0;display:block;}";
+  html += "input[type='submit']{background:#38a169;color:#fff;border:none;padding:10px 20px;border-radius:4px;cursor:pointer;font-weight:bold;}";
+  html += "<a href='/' class='back'>← Back to Local Dashboard</a>";
+  html += "</div></body></html>";
+  server.send(200, "text/html", html);
+}
+
+void handleGithubOtaTrigger() {
+  server.send(200, "text/plain", "Checking GitHub for firmware update...");
+  if (checkAndPerformGithubOTA()) {
+    ESP.restart();
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  delay(1000);
+
+  pinMode(LED_PIN, OUTPUT);
+  pinMode(MAX485_DE, OUTPUT);
+  digitalWrite(MAX485_DE, LOW);
+
+  pinMode(PIN_P1, INPUT_PULLUP);
+  pinMode(PIN_W5, INPUT_PULLUP);
+  pinMode(PIN_W4, INPUT_PULLUP);
+  pinMode(PIN_W3, INPUT_PULLUP);
+  pinMode(PIN_ALM, INPUT_PULLUP); // Dry contact on GPIO 3
+  pinMode(PIN_P2, INPUT_PULLUP);
+
+  analogReadResolution(12);
+
+  // RS485 Modbus Serial
+  Serial1.begin(9600, SERIAL_8N1, RX_PIN, TX_PIN);
+  node.begin(1, Serial1);
+  node.preTransmission(preTransmission);
+  node.postTransmission(postTransmission);
+
+  setupWiFi();
+
+  mqttClient.setServer(MQTT_SERVER, MQTT_PORT);
+  mqttClient.setCallback(mqttCallback);
+
+  server.on("/", HTTP_GET, handleRoot);
+  server.on("/update", HTTP_GET, handleUpdatePage);
+  server.on("/update-github", HTTP_GET, handleGithubOtaTrigger);
+
+  server.on("/update", HTTP_POST, []() {
+    server.sendHeader("Connection", "close");
+    server.send(200, "text/html", "<body style='background:#1a1e24;color:#e2e8f0;font-family:sans-serif;padding:30px;'><h2>OTA Complete!</h2><p>Rebooting... Please wait 10 seconds.</p><script>setTimeout(()=>{window.location.href='/';}, 10000);</script></body>");
+    ESP.restart();
+  }, []() {
+    HTTPUpload& upload = server.upload();
+    if (upload.status == UPLOAD_FILE_START) {
+      if (!Update.begin(UPDATE_SIZE_UNKNOWN)) {
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_WRITE) {
+      if (Update.write(upload.buf, upload.currentSize) != upload.currentSize) {
+        Update.printError(Serial);
+      }
+    } else if (upload.status == UPLOAD_FILE_END) {
+      if (Update.end(true)) {
+        Serial.printf("[OTA] Local Update Success: %u Bytes\n", upload.totalSize);
+      } else {
+        Update.printError(Serial);
+      }
+    }
+  });
+
+  server.begin();
+}
+
+void loop() {
+  if (WiFi.status() != WL_CONNECTED) setupWiFi();
+  if (!mqttClient.connected()) reconnectMqtt();
+  mqttClient.loop();
+  
+  server.handleClient();
+
+  // Evaluate 30-second alarm duration timer
+  processAlarmTimer();
+
+  // Evaluate clock for daily noon test SMS
+  checkDailyNoonTest();
+
+  if (otaRequestedViaMqtt) {
+    otaRequestedViaMqtt = false;
+    if (checkAndPerformGithubOTA()) {
+      ESP.restart();
+    }
+  }
+
+  unsigned long currentMillis = millis();
+
+  // Status LED blinker
+  if (currentMillis - previousMillis >= blinkInterval) {
+    previousMillis = currentMillis;
+    ledState = !ledState;
+    digitalWrite(LED_PIN, ledState);
+  }
+
+  // Publish to MQTT every 3 seconds
+  if (currentMillis - lastMqttPub >= 3000) {
+    lastMqttPub = currentMillis;
+    readModbusData();
+    
+    StaticJsonDocument<384> doc = buildTelemetryPayload();
+    char buffer[384];
+    serializeJson(doc, buffer);
+    
+    mqttClient.publish(MQTT_TOPIC, buffer);
+  }
+
+  // Post to Google Sheets logger every 30 seconds
+  if (currentMillis - lastGScriptPost >= 30000) {
+    lastGScriptPost = currentMillis;
+    StaticJsonDocument<384> doc = buildTelemetryPayload();
+    char buffer[384];
+    serializeJson(doc, buffer);
+    
+    sendGoogleSheetData(String(buffer));
+  }
+
+  // Periodic GitHub OTA Check (every 12 hours)
+  if (currentMillis - lastOtaCheck >= 43200000) {
+    lastOtaCheck = currentMillis;
+    if (checkAndPerformGithubOTA()) {
+      ESP.restart();
+    }
+  }
+}

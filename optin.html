@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>HTi Fabrication, LLC - Equipment Alert Signup</title>
+    <title>Country View Estates Water System - Water System Alert Signup</title>
     <style>
         body { font-family: Arial, sans-serif; max-width: 500px; margin: 40px auto; padding: 20px; border: 1px solid #ccc; border-radius: 8px; box-shadow: 0 2px 5px rgba(0,0,0,0.1); }
         .form-group { margin-bottom: 15px; }
@@ -21,8 +21,8 @@
 </head>
 <body>
 
-    <h2>HTi Fabrication, LLC</h2>
-    <p>Sign up to receive immediate SMS notifications regarding equipment failures and status updates.</p>
+    <h2>Country View Estates Water System</h2>
+    <p>Sign up to receive immediate SMS notifications regarding water system status and updates.</p>
 
     <form id="optinForm">
         <div class="form-group">
@@ -35,29 +35,30 @@
             <input type="tel" id="phone" name="phone" required placeholder="(555) 000-0000">
         </div>
 
-        <!-- Terms & Conditions Checkbox (Optional, but best practice) -->
+        <!-- Terms & Conditions Checkbox -->
         <div class="checkbox-group">
             <input type="checkbox" id="terms" name="terms" required>
             <label for="terms" style="font-weight: normal; font-size: 14px;">
-                I accept the <a href="https://htifabrication.com/terms" target="_blank">Terms of Service</a> and <a href="https://htifabrication.com/privacy" target="_blank">Privacy Policy</a>.
+                I accept the <a href="https://htijohnson.github.io/CVEWS/terms.html" target="_blank">Terms of Service</a> and <a href="https://htijohnson.github.io/CVEWS/privacypolicy.html" target="_blank">Privacy Policy</a>.
             </label>
         </div>
 
-        <!-- Dedicated SMS Consent Checkbox (MUST BE UNCHECKED BY DEFAULT) -->
+        <!-- Dedicated SMS Consent Checkbox -->
         <div class="checkbox-group">
             <input type="checkbox" id="sms_consent" name="sms_consent" required>
             <label for="sms_consent" id="consent_label" class="disclosure-text">
-                By checking this box, you agree to receive automated SMS text message alerts regarding <strong>equipment failures and status updates</strong> from <strong>HTi Fabrication, LLC</strong> at the phone number provided above. Consent is strictly for equipment status alerts and is not required as a condition of purchasing any goods or services. Message frequency varies based on equipment status. Message and data rates may apply. Reply <strong>STOP</strong> to unsubscribe or <strong>HELP</strong> for assistance. View our <a href="https://htifabrication.com/privacy" target="_blank">Privacy Policy</a> and <a href="https://htifabrication.com/terms" target="_blank">Terms of Service</a>.
+                By checking this box, you agree to receive automated SMS text message alerts regarding <strong>water system status and updates</strong> from <strong>Country View Estates Water System</strong> at the phone number provided above. Consent is strictly for water system status alerts and is not required as a condition of purchasing any goods or services. Message frequency varies based on system status. Message and data rates may apply. Reply <strong>STOP</strong> to unsubscribe or <strong>HELP</strong> for assistance. View our <a href="https://htijohnson.github.io/CVEWS/privacypolicy.html" target="_blank">Privacy Policy</a> and <a href="https://htijohnson.github.io/CVEWS/terms.html" target="_blank">Terms of Service</a>.
             </label>
         </div>
 
-        <button type="submit" id="submitBtn">Subscribe to Equipment Alerts</button>
+        <button type="submit" id="submitBtn">Subscribe to Water System Alerts</button>
     </form>
 
     <div id="status-msg"></div>
 
     <script>
-        const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxioAq537WbPTX7EW4xjIzfPF5xBkzipah6yzInr6OQagHUHC6kK4pdLuHCvg645RgdEQ/exec";
+        // Bound script endpoint targeting your active Google Sheet
+        const WEB_APP_URL = "https://script.google.com/macros/s/AKfycby0tMJYWzvQIr-bqjViqPL8Fs4qridwhoOxA5ZrIZUefblbCPiikQe7u7Zhk8N03dQ/exec";
 
         document.getElementById('optinForm').addEventListener('submit', async function(e) {
             e.preventDefault();
@@ -85,6 +86,7 @@
 
             // Prepare payload for Google Apps Script
             const formData = new URLSearchParams();
+            formData.append('type', 'optin');
             formData.append('name', name);
             formData.append('phone', phone);
             formData.append('ip', userIp);
@@ -107,7 +109,7 @@
                 console.error(error);
             } finally {
                 btn.disabled = false;
-                btn.innerText = "Subscribe to Equipment Alerts";
+                btn.innerText = "Subscribe to Water System Alerts";
             }
         });
     </script>
