@@ -256,6 +256,23 @@
     let isAlarmAckedLocally = false;
     let ackOperatorName = "";
 
+    // 3-Second Rolling Window Buffer for TUF-2000B Flow Rate
+    let flowReadingsWindow = [];
+    const FLOW_AVERAGE_WINDOW_MS = 3000;
+
+    function recordAndGetSmoothedFlow(currentGpm) {
+        const now = Date.now();
+        flowReadingsWindow.push({ timestamp: now, value: currentGpm });
+
+        // Retain only samples within the past 3 seconds
+        flowReadingsWindow = flowReadingsWindow.filter(item => (now - item.timestamp) <= FLOW_AVERAGE_WINDOW_MS);
+
+        if (flowReadingsWindow.length === 0) return currentGpm;
+
+        const sum = flowReadingsWindow.reduce((acc, curr) => acc + curr.value, 0);
+        return sum / flowReadingsWindow.length;
+    }
+
     const client = new Paho.MQTT.Client("wss://" + MQTT_HOST + ":" + MQTT_PORT + "/mqtt", "CVEWS_WebDash_" + Math.random().toString(16).substr(2, 8));
 
     client.onConnectionLost = (responseObject) => {
@@ -277,8 +294,9 @@
 
             if (message.destinationName === MQTT_TOPIC_TUF || data.flow_rate !== undefined) {
                 if (data.status === "ok" || data.flow_rate !== undefined) {
-                    const gpm = (data.flow_rate * M3_TO_GALLONS) / 60;
-                    updateFlowGauge(gpm);
+                    const rawGpm = (data.flow_rate * M3_TO_GALLONS) / 60;
+                    const smoothedGpm = recordAndGetSmoothedFlow(rawGpm);
+                    updateFlowGauge(smoothedGpm);
                 }
                 return;
             }
@@ -326,7 +344,8 @@
             }
 
             if (data.flow !== undefined) {
-                updateFlowGauge(data.flow);
+                const smoothedGpm = recordAndGetSmoothedFlow(parseFloat(data.flow) || 0.0);
+                updateFlowGauge(smoothedGpm);
             }
 
             if (data.cl2 !== undefined) {
