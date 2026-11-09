@@ -57,8 +57,8 @@
     <div id="status-msg"></div>
 
     <script>
-        // Bound script endpoint targeting your active Google Sheet
-        const WEB_APP_URL = "https://script.google.com/macros/s/AKfycby0tMJYWzvQIr-bqjViqPL8Fs4qridwhoOxA5ZrIZUefblbCPiikQe7u7Zhk8N03dQ/exec";
+        // Updated with your active deployment URL
+	const WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxWMsd8UO4LEE8JvAzZ1AZWaecI9gysj5bRAwoCh6ibXwu3JkRGuYlfGdjA2CANBkU/exec";
 
         document.getElementById('optinForm').addEventListener('submit', async function(e) {
             e.preventDefault();
@@ -69,7 +69,6 @@
             btn.innerText = "Submitting...";
             statusMsg.innerText = "";
 
-            // Fetch visitor IP address for compliance logging
             let userIp = "Unknown";
             try {
                 const ipResponse = await fetch('https://api.ipify.org?format=json');
@@ -79,34 +78,43 @@
                 console.warn("Could not fetch IP address");
             }
 
-            // Extract form inputs
-            const name = document.getElementById('name').value;
-            const phone = document.getElementById('phone').value;
-            const consentText = document.getElementById('consent_label').innerText;
-
-            // Prepare payload for Google Apps Script
-            const formData = new URLSearchParams();
-            formData.append('type', 'optin');
-            formData.append('name', name);
-            formData.append('phone', phone);
-            formData.append('ip', userIp);
-            formData.append('consent_text', consentText);
+            const payload = {
+                type: 'optin',
+                name: document.getElementById('name').value.trim(),
+                phone: document.getElementById('phone').value.trim(),
+                ip: userIp,
+                consent_text: document.getElementById('consent_label').innerText.trim()
+            };
 
             try {
+                // Sending stringified JSON as text/plain bypasses CORS preflight (OPTIONS check)
                 await fetch(WEB_APP_URL, {
                     method: 'POST',
                     mode: 'no-cors',
-                    headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-                    body: formData
+                    headers: {
+                        'Content-Type': 'text/plain;charset=utf-8'
+                    },
+                    body: JSON.stringify(payload)
                 });
 
                 statusMsg.style.color = "green";
                 statusMsg.innerText = "Opt-in saved successfully! You are registered for alerts.";
                 document.getElementById('optinForm').reset();
             } catch (error) {
-                statusMsg.style.color = "red";
-                statusMsg.innerText = "An error occurred. Please try again.";
-                console.error(error);
+                // Secondary Fallback: GET via Image Beacon (100% reliable across all browsers & firewalls)
+                try {
+                    const params = new URLSearchParams(payload);
+                    const img = new Image();
+                    img.src = `${WEB_APP_URL}?${params.toString()}&_t=${Date.now()}`;
+
+                    statusMsg.style.color = "green";
+                    statusMsg.innerText = "Opt-in saved successfully! You are registered for alerts.";
+                    document.getElementById('optinForm').reset();
+                } catch (fallbackError) {
+                    statusMsg.style.color = "red";
+                    statusMsg.innerText = "An error occurred. Please try again.";
+                    console.error("Submission failed:", fallbackError);
+                }
             } finally {
                 btn.disabled = false;
                 btn.innerText = "Subscribe to Water System Alerts";

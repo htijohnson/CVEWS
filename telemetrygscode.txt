@@ -1,11 +1,31 @@
 // ==========================================
 // TWILIO CREDENTIALS CONFIGURATION
 // ==========================================
-var TWILIO_ACCOUNT_SID = "ACxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"; // Your Twilio Account SID
-var TWILIO_AUTH_TOKEN  = "your_twilio_auth_token_here";        // Your Twilio Auth Token
-var TWILIO_FROM_NUMBER = "+1XXXXXXXXXX";                      // Your Twilio Phone Number (E.164 format)
+var TWILIO_ACCOUNT_SID = "ACc10097853fe91cc296b0fcd23aa89816"; // Your Twilio Account SID
+var TWILIO_AUTH_TOKEN  = "09c692d2b216bb09411fa11a56e06e4b";        // Your Twilio Auth Token
+var TWILIO_FROM_NUMBER = "+18779345619";                      // Your Twilio Phone Number (E.164 format)
+
+// Helper to format any standard US phone string into E.164 (+1XXXXXXXXXX)
+function formatToE164(phone) {
+  if (!phone) return null;
+  var digits = String(phone).replace(/\D/g, "");
+  if (digits.length === 10) {
+    return "+1" + digits;
+  } else if (digits.length === 11 && digits.charAt(0) === "1") {
+    return "+" + digits;
+  } else if (digits.length > 10) {
+    return "+" + digits;
+  }
+  return null;
+}
 
 function sendTwilioSms(toPhone, bodyText) {
+  var formattedTo = formatToE164(toPhone);
+  if (!formattedTo) {
+    Logger.log("Skipping SMS dispatch: Invalid phone number format: " + toPhone);
+    return;
+  }
+
   var url = "https://api.twilio.com/2010-04-01/Accounts/" + TWILIO_ACCOUNT_SID + "/Messages.json";
   var options = {
     "method": "post",
@@ -13,7 +33,7 @@ function sendTwilioSms(toPhone, bodyText) {
       "Authorization": "Basic " + Utilities.base64Encode(TWILIO_ACCOUNT_SID + ":" + TWILIO_AUTH_TOKEN)
     },
     "payload": {
-      "To": toPhone,
+      "To": formattedTo,
       "From": TWILIO_FROM_NUMBER,
       "Body": bodyText
     },
@@ -21,9 +41,11 @@ function sendTwilioSms(toPhone, bodyText) {
   };
   try {
     var response = UrlFetchApp.fetch(url, options);
-    Logger.log("Twilio SMS sent to " + toPhone + ": " + response.getContentText());
+    var code = response.getResponseCode();
+    var text = response.getContentText();
+    Logger.log("Twilio HTTP " + code + " to " + formattedTo + ": " + text);
   } catch(e) {
-    Logger.log("Error dispatching SMS to " + toPhone + ": " + e.toString());
+    Logger.log("Error dispatching SMS to " + formattedTo + ": " + e.toString());
   }
 }
 
@@ -41,12 +63,33 @@ function dispatchSmsToRecipients(messageBody) {
   var data = recipientSheet.getRange(2, 1, lastRow - 1, 5).getValues();
   
   for (var i = 0; i < data.length; i++) {
-    // Column C (Index 2) contains the subscriber's phone number
     var phone = String(data[i][2]).trim();
-    if (phone && phone.length >= 7) {
+    if (phone) {
       sendTwilioSms(phone, messageBody);
     }
   }
+}
+
+// ==========================================
+// OPT-IN RECORD WRITER (USED BY GET & POST)
+// ==========================================
+function saveOptInRecord(ss, name, phone, ip, consentText) {
+  var recipientSheet = ss.getSheetByName("Recipients");
+  if (!recipientSheet) {
+    recipientSheet = ss.insertSheet("Recipients");
+  }
+  
+  // If sheet is brand new or empty, write bold headers
+  if (recipientSheet.getLastRow() === 0) {
+    recipientSheet.appendRow(["Timestamp", "Full Name", "Phone / Target", "IP Address", "Consent Disclosure"]);
+    recipientSheet.getRange("A1:E1").setFontWeight("bold");
+  }
+
+  // Normalize phone to E.164 before saving to keep sheet consistent
+  var formattedPhone = formatToE164(phone) || phone;
+  recipientSheet.appendRow([new Date(), name, formattedPhone, ip, consentText]);
+  SpreadsheetApp.flush();
+  Logger.log("Successfully recorded opt-in for: " + name + " (" + formattedPhone + ")");
 }
 
 // ==========================================
@@ -58,35 +101,67 @@ function doPost(e) {
     mLock.waitLock(30000);
     
     var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var rawContents = (e && e.postData && e.postData.contents) ? e.postData.contents : "";
+    Logger.log("Incoming doPost rawContents: " + rawContents);
+
+    // Parse JSON safely if present
+    var parsedJson = null;
+    if (rawContents) {
+      try {
+        parsedJson = JSON.parse(rawContents);
+      } catch (parseIgnore) {}
+    }
 
     // ----------------------------------------------------
-    // BRANCH A: Form Submission from optin.html
+    // CHECK 1: Opt-in Form Submission (from POST requests)
     // ----------------------------------------------------
-    if (e && e.parameter && (e.parameter.type === "optin" || e.parameter.name || e.parameter.phone)) {
-      var recipientSheet = ss.getSheetByName("Recipients");
-      if (!recipientSheet) {
-        recipientSheet = ss.insertSheet("Recipients");
-        recipientSheet.appendRow(["Timestamp", "Full Name", "Phone / Target", "IP Address", "Consent Disclosure"]);
-        recipientSheet.getRange("A1:E1").setFontWeight("bold");
-      }
+    var isOptIn = false;
+    var name = "", phone = "", ip = "Unknown", consentText = "";
 
-      var name = e.parameter.name || "";
-      var phone = e.parameter.phone || "";
-      var ip = e.parameter.ip || "Unknown";
-      var consentText = e.parameter.consent_text || "";
+    if (parsedJson && (parsedJson.type === "optin" || parsedJson.phone || parsedJson.consent_text)) {
+      isOptIn = true;
+      name = parsedJson.name || "";
+      phone = parsedJson.phone || "";
+      ip = parsedJson.ip || "Unknown";
+      consentText = parsedJson.consent_text || "";
+    } else if (e && e.parameter && (e.parameter.type === "optin" || e.parameter.phone || e.parameter.name)) {
+      isOptIn = true;
+      name = e.parameter.name || "";
+      phone = e.parameter.phone || "";
+      ip = e.parameter.ip || "Unknown";
+      consentText = e.parameter.consent_text || "";
+    } else if (rawContents && (rawContents.indexOf("type=optin") !== -1 || rawContents.indexOf("phone=") !== -1)) {
+      isOptIn = true;
+      var params = {};
+      rawContents.split("&").forEach(function(part) {
+        var item = part.split("=");
+        if (item.length === 2) {
+          params[decodeURIComponent(item[0])] = decodeURIComponent(item[1].replace(/\+/g, " "));
+        }
+      });
+      name = params.name || "";
+      phone = params.phone || "";
+      ip = params.ip || "Unknown";
+      consentText = params.consent_text || "";
+    }
 
-      recipientSheet.appendRow([new Date(), name, phone, ip, consentText]);
-
+    if (isOptIn) {
+      saveOptInRecord(ss, name, phone, ip, consentText);
       return ContentService.createTextOutput(JSON.stringify({ "status": "success", "message": "Opt-in saved successfully" }))
                            .setMimeType(ContentService.MimeType.JSON);
     }
 
     // ----------------------------------------------------
-    // BRANCH B: ESP32 Ingestion (JSON payload)
+    // CHECK 2: ESP32 JSON Payload Ingestion
     // ----------------------------------------------------
-    var payloadData = JSON.parse(e.postData.contents);
+    var payloadData = parsedJson;
+    if (!payloadData) {
+      Logger.log("Invalid or unrecognized data: " + rawContents);
+      return ContentService.createTextOutput(JSON.stringify({"status": "error", "message": "Invalid JSON or unrecognized form data"}))
+                           .setMimeType(ContentService.MimeType.JSON);
+    }
     
-    // Check for Alarm SMS Trigger (> 30 seconds tripped)
+    // Check for Alarm SMS Trigger (> 30s)
     if (payloadData.action === "alarm_sms") {
       var alertText = payloadData.message || "🚨 CVEWS CRITICAL ALERT: System Alarm Light active > 30s! Check https://htijohnson.github.io/CVEWS/";
       dispatchSmsToRecipients(alertText);
@@ -94,7 +169,7 @@ function doPost(e) {
                            .setMimeType(ContentService.MimeType.JSON);
     }
 
-    // Check for Daily Noon Test SMS Trigger
+    // Check for Daily Noon Test SMS
     if (payloadData.action === "daily_test_sms") {
       var testText = payloadData.message || "CVEWS DAILY SYSTEM TEST: System operational. Dashboard: https://htijohnson.github.io/CVEWS/";
       dispatchSmsToRecipients(testText);
@@ -109,18 +184,18 @@ function doPost(e) {
     }
     
     var logRow = [
-      new Date(),                     // Col A: Timestamp
-      payloadData.tk_sm,              // Col B: Small Tank
-      payloadData.tk_lg,              // Col C: Large Tank
-      payloadData.flow,               // Col D: Flow Rate (GPM)
-      payloadData.cl2,                // Col E: Chlorine Content
-      payloadData.w1 ? 1 : 0,         // Col F: Well 1
-      payloadData.w3 ? 1 : 0,         // Col G: Well 3
-      payloadData.w4 ? 1 : 0,         // Col H: Well 4
-      payloadData.w5 ? 1 : 0,         // Col I: Well 5
-      payloadData.p1 ? 1 : 0,         // Col J: Pump 1
-      payloadData.p2 ? 1 : 0,         // Col K: Pump 2
-      payloadData.alm ? 1 : 0         // Col L: Master Alarm Status
+      new Date(),
+      payloadData.tk_sm,
+      payloadData.tk_lg,
+      payloadData.flow,
+      payloadData.cl2,
+      payloadData.w1 ? 1 : 0,
+      payloadData.w3 ? 1 : 0,
+      payloadData.w4 ? 1 : 0,
+      payloadData.w5 ? 1 : 0,
+      payloadData.p1 ? 1 : 0,
+      payloadData.p2 ? 1 : 0,
+      payloadData.alm ? 1 : 0
     ];
     
     sheet.appendRow(logRow);
@@ -128,14 +203,14 @@ function doPost(e) {
     try {
       scanForActiveAlarms(payloadData);
     } catch(err) {
-      console.error("Alarm notifier error: " + err.toString());
+      Logger.log("Alarm notifier error: " + err.toString());
     }
     
     return ContentService.createTextOutput(JSON.stringify({"status": "success", "row": sheet.getLastRow()}))
                          .setMimeType(ContentService.MimeType.JSON);
                          
   } catch(error) {
-    console.error("Inbound Post Failure: " + error.toString());
+    Logger.log("Critical Post Ingestion Failure: " + error.toString());
     return ContentService.createTextOutput(JSON.stringify({"status": "error", "message": error.toString()}))
                          .setMimeType(ContentService.MimeType.JSON);
   } finally {
@@ -267,8 +342,31 @@ function getGallonsPumpedOverHours(hours) {
 // ==========================================
 // 4. WEBPAGE API ENTRANCE (GET METHOD)
 // ==========================================
-function doGet() {
+function doGet(e) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
+  
+  // Handle opt-in submissions via GET query params if invoked directly or via beacon
+  if (e && e.parameter && (e.parameter.type === "optin" || e.parameter.phone || e.parameter.name)) {
+    var mLock = LockService.getScriptLock();
+    try {
+      mLock.waitLock(30000);
+      var name = e.parameter.name || "";
+      var phone = e.parameter.phone || "";
+      var ip = e.parameter.ip || "Unknown";
+      var consentText = e.parameter.consent_text || "";
+      
+      saveOptInRecord(ss, name, phone, ip, consentText);
+      return ContentService.createTextOutput(JSON.stringify({ "status": "success", "message": "Opt-in saved successfully" }))
+                           .setMimeType(ContentService.MimeType.JSON);
+    } catch(err) {
+      return ContentService.createTextOutput(JSON.stringify({ "status": "error", "message": err.toString() }))
+                           .setMimeType(ContentService.MimeType.JSON);
+    } finally {
+      mLock.releaseLock();
+    }
+  }
+
+  // Dashboard API telemetry responder
   var sheet = ss.getSheetByName("Sheet1");
   var lastRow = sheet.getLastRow();
   
