@@ -15,9 +15,10 @@
         header h1 { font-size: 24px; letter-spacing: 1px; color: #edf2f7; }
         .alarm-zone { display: flex; flex-direction: column; justify-content: center; align-items: center; margin-bottom: 40px; }
         
-        .alarm-banner { width: 100%; max-width: 600px; padding: 20px; border-radius: 8px; text-align: center; font-weight: bold; font-size: 22px; letter-spacing: 2px; transition: all 0.3s; background-color: #2d3748; border: 2px solid #4a5568; }
-        .alarm-active { background-color: #742a2a; border: 2px solid #e53e3e; color: #fff5f5; box-shadow: 0 0 15px rgba(229, 62, 62, 0.4); animation: pulse-fast 1s infinite; }
-        .alarm-normal { background-color: #1c4532; border: 2px solid #38a169; color: #f0fff4; }
+        .alarm-banner { width: 100%; max-width: 600px; padding: 20px; border-radius: 8px; text-align: center; font-weight: bold; font-size: 22px; letter-spacing: 2px; transition: all 0.3s; background-color: #2d3748; border: 2px solid #4a5568; user-select: none; }
+        .alarm-active { background-color: #742a2a; border: 2px solid #e53e3e; color: #fff5f5; box-shadow: 0 0 15px rgba(229, 62, 62, 0.4); animation: pulse-fast 1s infinite; cursor: pointer; }
+        .alarm-acknowledged { background-color: #744210; border: 2px solid #d69e2e; color: #fffaf0; cursor: default; }
+        .alarm-normal { background-color: #1c4532; border: 2px solid #38a169; color: #f0fff4; cursor: default; }
         
         .local-link-box { margin-top: 10px; font-size: 14px; color: #a0aec0; text-align: center; }
         .local-link-box a { color: #63b3ed; text-decoration: underline; font-weight: bold; }
@@ -30,6 +31,8 @@
         .sensor-label { font-size: 14px; color: #a0aec0; margin-bottom: 10px; text-align: center; }
         .sensor-value { font-size: 32px; font-weight: bold; color: #63b3ed; font-family: monospace; margin-bottom: 10px; }
         
+        .unmonitored-banner { font-size: 11px; text-align: center; color: #e2e8f0; background: #4a5568; border-radius: 4px; padding: 4px 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
+
         .gauge-extremes { width: 100%; display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; border-top: 1px dashed #334155; padding-top: 8px; margin-top: 5px; }
         .gauge-extremes span { font-family: monospace; color: #cbd5e0; font-weight: bold; }
 
@@ -87,6 +90,7 @@
     <div class="sensor-grid">
         <div id="cardSmall" class="sensor-card gauge-card">
             <div class="sensor-label">Small Tank Level</div>
+            <div class="unmonitored-banner">⚠️ Not yet monitored, ignore</div>
             <div class="gauge-wrapper">
                 <div class="gauge-body">
                     <div id="fillSmall" class="gauge-fill" style="background-color: #3182ce;"></div>
@@ -102,6 +106,7 @@
 
         <div id="cardLarge" class="sensor-card gauge-card">
             <div class="sensor-label">Large Tank Level</div>
+            <div class="unmonitored-banner">⚠️ Not yet monitored, ignore</div>
             <div class="gauge-wrapper">
                 <div class="gauge-body">
                     <div id="fillLarge" class="gauge-fill" style="background-color: #31ac87;"></div>
@@ -129,6 +134,7 @@
 
         <div id="cardCl2" class="sensor-card gauge-card">
             <div class="sensor-label">CL-17 Chlorine Content</div>
+            <div class="unmonitored-banner">⚠️ Not yet monitored, ignore</div>
             <div class="gauge-wrapper">
                 <div class="gauge-body">
                     <div id="fillCl2" class="gauge-fill" style="background-color: #b7791f;"></div>
@@ -207,17 +213,38 @@
     </div>
 </div>
 
+<!-- Modal Prompt for Alarm Ack -->
+<div id="ackModal" style="display:none; position:fixed; z-index:9999; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.7); justify-content:center; align-items:center;">
+    <div style="background:#232934; border:2px solid #e53e3e; border-radius:8px; padding:25px; width:90%; max-width:380px; box-shadow:0 0 20px rgba(0,0,0,0.8);">
+        <h3 style="color:#fc8181; margin-bottom:15px; text-align:center;">ACKNOWLEDGE ALARM</h3>
+        <p style="font-size:13px; color:#cbd5e0; margin-bottom:15px; text-align:center;">Enter your details to stop repeating alerts.</p>
+        <div style="margin-bottom:12px;">
+            <label style="display:block; font-size:12px; color:#a0aec0; margin-bottom:4px;">Operator Name:</label>
+            <input id="ackName" type="text" placeholder="e.g. John" style="width:100%; padding:8px; border-radius:4px; border:1px solid #4a5568; background:#1a1e24; color:#fff;" />
+        </div>
+        <div style="margin-bottom:16px;">
+            <label style="display:block; font-size:12px; color:#a0aec0; margin-bottom:4px;">Security PIN:</label>
+            <input id="ackPin" type="password" maxlength="8" placeholder="PIN" style="width:100%; padding:8px; border-radius:4px; border:1px solid #4a5568; background:#1a1e24; color:#fff;" />
+        </div>
+        <div style="display:flex; justify-content:space-between;">
+            <button onclick="closeAckModal()" style="padding:8px 16px; background:#4a5568; color:#fff; border:none; border-radius:4px; cursor:pointer;">Cancel</button>
+            <button onclick="submitAlarmAck()" style="padding:8px 16px; background:#e53e3e; color:#fff; font-weight:bold; border:none; border-radius:4px; cursor:pointer;">Acknowledge</button>
+        </div>
+    </div>
+</div>
+
 <script>
     const MQTT_HOST = "91edf0b43131429b9a2d60d852310ada.s1.eu.hivemq.cloud"; 
     const MQTT_PORT = 8884;
     
-    // Subscribe-Only Credentials
-    const MQTT_USER = "cvewsobserver1"; 
-    const MQTT_PASS = "water123";  
+    // HiveMQ Credentials (Using telemetry user with write permission to publish ACK)
+    const MQTT_USER = "cvewstelemetry"; 
+    const MQTT_PASS = "Water123!";  
     
     const MQTT_TOPIC_LIVE = "CVEWS/telemetry/live";
-    const MQTT_TOPIC_TUF = "tuf2000b/data";
-    const M3_TO_GALLONS = 264.172;
+    const MQTT_TOPIC_TUF  = "tuf2000b/data";
+    const MQTT_TOPIC_ACK  = "CVEWS/alarm/ack";
+    const M3_TO_GALLONS   = 264.172;
     
     // Main Telemetry Endpoint (Well runtimes, extremes, alarms)
     const GOOGLE_WEB_APP_URL = "https://script.google.com/macros/s/AKfycby0tMJYWzvQIr-bqjViqPL8Fs4qridwhoOxA5ZrIZUefblbCPiikQe7u7Zhk8N03dQ/exec";
@@ -225,6 +252,9 @@
     const TUF_GOOGLE_APP_URL = "https://script.google.com/macros/s/AKfycbwxsJZH_EOo4uYUtws1NBxNu92Ol1dhUhmQVDL4jep9nzn42hbqcQKkpecNoXbrVlc/exec";
 
     let historicalLogs = [];
+    let isAlarmActive = false;
+    let isAlarmAckedLocally = false;
+    let ackOperatorName = "";
 
     const client = new Paho.MQTT.Client("wss://" + MQTT_HOST + ":" + MQTT_PORT + "/mqtt", "CVEWS_WebDash_" + Math.random().toString(16).substr(2, 8));
 
@@ -330,10 +360,21 @@
             toggleBadge("badgeAlm", data.alm, "active-red", "Tripped", "Clear");
 
             const banner = document.getElementById("alarmBanner");
-            if (data.alm || data.alm === "1" || data.alm === "TRIPPED") {
-                banner.className = "alarm-banner alarm-active";
-                banner.innerText = "⚠️ SYSTEM ALARM ACTIVE ⚠️";
+            const tripped = (data.alm === 1 || data.alm === "1" || data.alm === "TRIPPED");
+
+            if (tripped) {
+                isAlarmActive = true;
+                if (isAlarmAckedLocally) {
+                    banner.className = "alarm-banner alarm-acknowledged";
+                    banner.innerText = "ALARM ACKNOWLEDGED (" + (ackOperatorName || "OPERATOR") + ") - INVESTIGATING";
+                } else {
+                    banner.className = "alarm-banner alarm-active";
+                    banner.innerText = "⚠️ SYSTEM ALARM ACTIVE - CLICK TO ACKNOWLEDGE ⚠️";
+                }
             } else {
+                isAlarmActive = false;
+                isAlarmAckedLocally = false;
+                ackOperatorName = "";
                 banner.className = "alarm-banner alarm-normal";
                 banner.innerText = "SECURED LINK ESTABLISHED - SYSTEM OK";
             }
@@ -372,6 +413,53 @@
             badge.className = "status-badge";
             if (textNode) textNode.innerText = idleText;
         }
+    }
+
+    // Modal Control & Alarm Acknowledgment
+    const alarmBanner = document.getElementById("alarmBanner");
+    alarmBanner.addEventListener("click", () => {
+        if (isAlarmActive && !isAlarmAckedLocally) {
+            document.getElementById("ackModal").style.display = "flex";
+            document.getElementById("ackName").focus();
+        }
+    });
+
+    function closeAckModal() {
+        document.getElementById("ackModal").style.display = "none";
+        document.getElementById("ackPin").value = "";
+    }
+
+    function submitAlarmAck() {
+        const name = document.getElementById("ackName").value.trim();
+        const pin = document.getElementById("ackPin").value.trim();
+
+        if (!name) {
+            alert("Please enter your name.");
+            return;
+        }
+        if (!pin) {
+            alert("Please enter the security PIN.");
+            return;
+        }
+
+        if (!client.isConnected()) {
+            alert("MQTT connection not established. Please wait and try again.");
+            return;
+        }
+
+        const payload = JSON.stringify({ name: name, pin: pin });
+        const message = new Paho.MQTT.Message(payload);
+        message.destinationName = MQTT_TOPIC_ACK;
+        client.send(message);
+
+        isAlarmAckedLocally = true;
+        ackOperatorName = name.toUpperCase();
+
+        const banner = document.getElementById("alarmBanner");
+        banner.className = "alarm-banner alarm-acknowledged";
+        banner.innerText = "ALARM ACKNOWLEDGED (" + ackOperatorName + ") - INVESTIGATING";
+
+        closeAckModal();
     }
 
     // Integrated Volume Calculation using Trapezoidal Rule from flowtest.html
