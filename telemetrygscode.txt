@@ -1,9 +1,12 @@
 // ==========================================
 // TWILIO CREDENTIALS CONFIGURATION
+// Stored securely in Project Settings > Script Properties
 // ==========================================
-var TWILIO_ACCOUNT_SID = "ACc10097853fe91cc296b0fcd23aa89816"; // Your Twilio Account SID
-var TWILIO_AUTH_TOKEN  = "09c692d2b216bb09411fa11a56e06e4b";        // Your Twilio Auth Token
-var TWILIO_FROM_NUMBER = "+18779345619";                      // Your Twilio Phone Number (E.164 format)
+var scriptProps = PropertiesService.getScriptProperties();
+var TWILIO_ACCOUNT_SID = scriptProps.getProperty("TWILIO_ACCOUNT_SID");
+var TWILIO_AUTH_TOKEN  = scriptProps.getProperty("TWILIO_AUTH_TOKEN");
+var TWILIO_FROM_NUMBER = scriptProps.getProperty("TWILIO_FROM_NUMBER");
+var ALARM_ACK_PIN      = scriptProps.getProperty("ALARM_ACK_PIN") || "3141";
 
 // Helper to format any standard US phone string into E.164 (+1XXXXXXXXXX)
 function formatToE164(phone) {
@@ -17,6 +20,48 @@ function formatToE164(phone) {
     return "+" + digits;
   }
   return null;
+}
+
+// Validates that PIN matches the last 4 of Column 3 (Phone) AND
+// entered name matches (or is a part of) Column 2 (Full Name) on that same row
+function validateRecipientCredentials(enteredName, enteredPin) {
+  var cleanPin = String(enteredPin || "").trim();
+  var cleanName = String(enteredName || "").trim().toLowerCase();
+
+  if (!cleanPin || !cleanName) return false;
+
+  // Master/Admin PIN override check
+  if (cleanPin === String(ALARM_ACK_PIN).trim()) {
+    return true;
+  }
+
+  var ss = SpreadsheetApp.getActiveSpreadsheet();
+  var recipientSheet = ss.getSheetByName("Recipients");
+  if (!recipientSheet) return false;
+
+  var lastRow = recipientSheet.getLastRow();
+  if (lastRow < 2) return false;
+
+  // Read Column 2 (Full Name) and Column 3 (Phone / Target)
+  var data = recipientSheet.getRange(2, 2, lastRow - 1, 2).getValues();
+
+  for (var i = 0; i < data.length; i++) {
+    var sheetName = String(data[i][0] || "").trim().toLowerCase();
+    var rawPhone = String(data[i][1] || "").replace(/\D/g, "");
+
+    if (rawPhone.length >= 4) {
+      var lastFour = rawPhone.slice(-4);
+
+      // Check both: PIN matches last 4 AND entered name matches any part of sheet name (or vice versa)
+      if (cleanPin === lastFour) {
+        if (sheetName.indexOf(cleanName) !== -1 || cleanName.indexOf(sheetName) !== -1) {
+          return true;
+        }
+      }
+    }
+  }
+
+  return false;
 }
 
 function sendTwilioSms(toPhone, bodyText) {
@@ -169,11 +214,36 @@ function doPost(e) {
                            .setMimeType(ContentService.MimeType.JSON);
     }
 
+    // Check for Alarm Resolved SMS Trigger
+    if (payloadData.action === "alarm_clear") {
+      var clearText = payloadData.message || "✅ CVEWS RESOLVED: The System Alarm has cleared and returned to normal status.";
+      dispatchSmsToRecipients(clearText);
+      return ContentService.createTextOutput(JSON.stringify({"status": "alarm_clear_dispatched"}))
+                           .setMimeType(ContentService.MimeType.JSON);
+    }
+
     // Check for Daily Noon Test SMS
     if (payloadData.action === "daily_test_sms") {
       var testText = payloadData.message || "CVEWS DAILY SYSTEM TEST: System operational. Dashboard: https://htijohnson.github.io/CVEWS/";
       dispatchSmsToRecipients(testText);
       return ContentService.createTextOutput(JSON.stringify({"status": "daily_test_sms_dispatched"}))
+                           .setMimeType(ContentService.MimeType.JSON);
+    }
+
+    // Check for Alarm Acknowledgment SMS (Validates Name in Col 2 & Last 4 in Col 3)
+    if (payloadData.action === "alarm_ack") {
+      var techName = String(payloadData.name || "").trim();
+      var enteredPin = String(payloadData.pin || "").trim();
+
+      if (!validateRecipientCredentials(techName, enteredPin)) {
+        return ContentService.createTextOutput(JSON.stringify({ "status": "error", "message": "Invalid Name or PIN" }))
+                             .setMimeType(ContentService.MimeType.JSON);
+      }
+
+      var ackMessage = techName + " Acknowledge the Alarm and is investingating";
+      dispatchSmsToRecipients(ackMessage);
+
+      return ContentService.createTextOutput(JSON.stringify({ "status": "success", "message": ackMessage }))
                            .setMimeType(ContentService.MimeType.JSON);
     }
 
