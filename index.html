@@ -67,6 +67,9 @@
         .active-red .light-indicator { background-color: #e53e3e; box-shadow: 0 0 10px #e53e3e; }
         .active-red .badge-status-text { color: #e53e3e; }
 
+        .footer-version { margin-top: 50px; padding: 20px 0 10px 0; border-top: 1px solid #2d3748; text-align: center; font-size: 14px; color: #a0aec0; letter-spacing: 0.5px; }
+        .footer-version strong { color: #63b3ed; font-family: monospace; font-size: 15px; }
+
         @keyframes pulse-fast { 0% { transform: scale(1); } 50% { transform: scale(1.02); } 100% { transform: scale(1); } }
         @keyframes flash-yellow-slow { 0%, 100% { background-color: #232934; } 50% { background-color: #2c2414; } }
         @keyframes flash-red-fast { 0%, 100% { background-color: #232934; } 50% { background-color: #341616; } }
@@ -211,6 +214,10 @@
             <div class="badge-runtime">30D: <span id="alm30d">--</span> trips</div>
         </div>
     </div>
+
+    <div class="footer-version">
+        Lower Pumphouse Version: <strong id="lowerPumphouseVersion">Awaiting telemetry...</strong>
+    </div>
 </div>
 
 <!-- Modal Prompt for Alarm Ack -->
@@ -237,16 +244,16 @@
     const MQTT_HOST = "91edf0b43131429b9a2d60d852310ada.s1.eu.hivemq.cloud"; 
     const MQTT_PORT = 8884;
     
-    // HiveMQ Credentials (Using telemetry user with write permission to publish ACK)
+    // HiveMQ Credentials
     const MQTT_USER = "cvewstelemetry"; 
     const MQTT_PASS = "Water123!";  
     
-    const MQTT_TOPIC_LIVE = "CVEWS/telemetry/live";
-    const MQTT_TOPIC_TUF  = "tuf2000b/data";
-    const MQTT_TOPIC_ACK  = "CVEWS/alarm/ack";
-    const M3_TO_GALLONS   = 264.172;
+    const MQTT_TOPIC_LIVE    = "CVEWS/telemetry/live";
+    const MQTT_TOPIC_TUF     = "tuf2000b/data";
+    const MQTT_TOPIC_ACK     = "CVEWS/alarm/ack";
+    const MQTT_TOPIC_VERSION = "CVEWS/lowerpumphouse/version";
+    const M3_TO_GALLONS      = 264.172;
     
-    // Main Telemetry Endpoint (Well runtimes, extremes, alarms, and flow totals)
     const GOOGLE_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxWMsd8UO4LEE8JvAzZ1AZWaecI9gysj5bRAwoCh6ibXwu3JkRGuYlfGdjA2CANBkU/exec";
 
     let isAlarmActive = false;
@@ -260,12 +267,8 @@
     function recordAndGetSmoothedFlow(currentGpm) {
         const now = Date.now();
         flowReadingsWindow.push({ timestamp: now, value: currentGpm });
-
-        // Retain only samples within the past 3 seconds
         flowReadingsWindow = flowReadingsWindow.filter(item => (now - item.timestamp) <= FLOW_AVERAGE_WINDOW_MS);
-
         if (flowReadingsWindow.length === 0) return currentGpm;
-
         const sum = flowReadingsWindow.reduce((acc, curr) => acc + curr.value, 0);
         return sum / flowReadingsWindow.length;
     }
@@ -280,7 +283,21 @@
 
     client.onMessageArrived = (message) => {
         try {
+            // Check direct string version topic
+            if (message.destinationName === MQTT_TOPIC_VERSION) {
+                const verText = message.payloadString.trim();
+                if (verText) {
+                    document.getElementById("lowerPumphouseVersion").innerText = "v" + verText;
+                }
+                return;
+            }
+
             const data = JSON.parse(message.payloadString);
+
+            // Update footer version from live telemetry JSON if present
+            if (data.version) {
+                document.getElementById("lowerPumphouseVersion").innerText = "v" + data.version;
+            }
 
             // Dynamically update the local IP link when published by ESP32
             if (data.ip) {
@@ -431,7 +448,6 @@
         }
     }
 
-    // Modal Control & Alarm Acknowledgment
     const alarmBanner = document.getElementById("alarmBanner");
     alarmBanner.addEventListener("click", () => {
         if (isAlarmActive && !isAlarmAckedLocally) {
@@ -497,7 +513,6 @@
                 document.getElementById("lgMin").innerText = Math.round(data.lg_min).toLocaleString();
                 document.getElementById("lgMax").innerText = Math.round(data.lg_max).toLocaleString();
 
-                // Direct mapping to server-calculated totals
                 if (data.pumped_1h !== undefined) {
                     document.getElementById("lcd1h").innerText = Number(data.pumped_1h).toLocaleString();
                     document.getElementById("lcd6h").innerText = Number(data.pumped_6h).toLocaleString();
@@ -517,6 +532,7 @@
                 document.getElementById("alarmBanner").innerText = "SECURED LINK ESTABLISHED - TUNED IN";
                 client.subscribe(MQTT_TOPIC_LIVE);
                 client.subscribe(MQTT_TOPIC_TUF);
+                client.subscribe(MQTT_TOPIC_VERSION);
             },
             onFailure: (err) => { 
                 setTimeout(connectBroker, 5000); 
