@@ -222,7 +222,46 @@ function doPost(e) {
 
     // Check for Daily Noon Test SMS
     if (payloadData.action === "daily_test_sms") {
-      var testText = payloadData.message || "CVEWS DAILY SYSTEM TEST: System operational. Dashboard: https://htijohnson.github.io/CVEWS/";
+      var sheet = ss.getSheetByName("Sheet1");
+      var snapshotLines = [];
+      
+      if (sheet && sheet.getLastRow() >= 2) {
+        var lastR = sheet.getLastRow();
+        var rData = sheet.getRange(lastR, 1, 1, 12).getValues()[0];
+        
+        var rowTime = Utilities.formatDate(new Date(rData[0]), Session.getScriptTimeZone(), "MM/dd HH:mm:ss");
+        var tkSm    = Math.round(Number(rData[1]) || 0);
+        var tkLg    = Math.round(Number(rData[2]) || 0);
+        var flow    = (Number(rData[3]) || 0).toFixed(1);
+        var cl2     = (Number(rData[4]) || 0).toFixed(2);
+        
+        // Digital states: 1 = Running/Active, 0 = Idle/Clear
+        var w1  = rData[5]  == 1 ? "RUN" : "IDLE";
+        var w3  = rData[6]  == 1 ? "RUN" : "IDLE";
+        var w4  = rData[7]  == 1 ? "RUN" : "IDLE";
+        var w5  = rData[8]  == 1 ? "RUN" : "IDLE";
+        var p1  = rData[9]  == 1 ? "RUN" : "IDLE";
+        var p2  = rData[10] == 1 ? "RUN" : "IDLE";
+        var alm = (rData[11] == 1 || rData[11] === "TRIPPED") ? "TRIPPED" : "CLEAR";
+
+        snapshotLines = [
+          "Latest Log: " + rowTime,
+          "• Sm Tank: " + tkSm + " gal",
+          "• Lg Tank: " + tkLg + " gal",
+          "• Cl2: " + cl2 + " mg/L",
+          "• Flow: " + flow + " GPM",
+          "• Wells: W1:" + w1 + " | W3:" + w3 + " | W4:" + w4 + " | W5:" + w5,
+          "• Boosters: P1:" + p1 + " | P2:" + p2,
+          "• Alarm: " + alm
+        ];
+      }
+
+      var testText = "CVEWS System Messaging Daily Test Text. (Some values aren't being monitored yet)";
+      if (snapshotLines.length > 0) {
+        testText += "\n\n" + snapshotLines.join("\n");
+      }
+      testText += "\n\nDashboard: https://htijohnson.github.io/CVEWS/";
+
       dispatchSmsToRecipients(testText);
       return ContentService.createTextOutput(JSON.stringify({"status": "daily_test_sms_dispatched"}))
                            .setMimeType(ContentService.MimeType.JSON);
