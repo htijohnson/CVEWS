@@ -8,6 +8,8 @@ var TWILIO_AUTH_TOKEN  = scriptProps.getProperty("TWILIO_AUTH_TOKEN");
 var TWILIO_FROM_NUMBER = scriptProps.getProperty("TWILIO_FROM_NUMBER");
 var ALARM_ACK_PIN      = scriptProps.getProperty("ALARM_ACK_PIN") || "3141";
 
+var M3_TO_GALLONS = 264.172;
+
 // Helper to format any standard US phone string into E.164 (+1XXXXXXXXXX)
 function formatToE164(phone) {
   if (!phone) return null;
@@ -52,7 +54,6 @@ function validateRecipientCredentials(enteredName, enteredPin) {
     if (rawPhone.length >= 4) {
       var lastFour = rawPhone.slice(-4);
 
-      // Check both: PIN matches last 4 AND entered name matches any part of sheet name (or vice versa)
       if (cleanPin === lastFour) {
         if (sheetName.indexOf(cleanName) !== -1 || cleanName.indexOf(sheetName) !== -1) {
           return true;
@@ -124,13 +125,11 @@ function saveOptInRecord(ss, name, phone, ip, consentText) {
     recipientSheet = ss.insertSheet("Recipients");
   }
   
-  // If sheet is brand new or empty, write bold headers
   if (recipientSheet.getLastRow() === 0) {
     recipientSheet.appendRow(["Timestamp", "Full Name", "Phone / Target", "IP Address", "Consent Disclosure"]);
     recipientSheet.getRange("A1:E1").setFontWeight("bold");
   }
 
-  // Normalize phone to E.164 before saving to keep sheet consistent
   var formattedPhone = formatToE164(phone) || phone;
   recipientSheet.appendRow([new Date(), name, formattedPhone, ip, consentText]);
   SpreadsheetApp.flush();
@@ -149,7 +148,6 @@ function doPost(e) {
     var rawContents = (e && e.postData && e.postData.contents) ? e.postData.contents : "";
     Logger.log("Incoming doPost rawContents: " + rawContents);
 
-    // Parse JSON safely if present
     var parsedJson = null;
     if (rawContents) {
       try {
@@ -158,7 +156,7 @@ function doPost(e) {
     }
 
     // ----------------------------------------------------
-    // CHECK 1: Opt-in Form Submission (from POST requests)
+    // CHECK 1: Opt-in Form Submission
     // ----------------------------------------------------
     var isOptIn = false;
     var name = "", phone = "", ip = "Unknown", consentText = "";
@@ -230,7 +228,7 @@ function doPost(e) {
                            .setMimeType(ContentService.MimeType.JSON);
     }
 
-    // Check for Alarm Acknowledgment SMS (Validates Name in Col 2 & Last 4 in Col 3)
+    // Check for Alarm Acknowledgment SMS
     if (payloadData.action === "alarm_ack") {
       var techName = String(payloadData.name || "").trim();
       var enteredPin = String(payloadData.pin || "").trim();
@@ -389,7 +387,8 @@ function getGallonsPumpedOverHours(hours) {
   var now = new Date();
   var cutoffTime = new Date(now.getTime() - (hours * 60 * 60 * 1000));
   
-  var maxRowsToRead = Math.min(lastRow - 1, hours * 65); 
+  // ESP32 posts every 30 seconds (~120 rows/hour)
+  var maxRowsToRead = Math.min(lastRow - 1, hours * 130); 
   var startRow = lastRow - maxRowsToRead + 1;
   
   var timestamps = sheet.getRange(startRow, 1, maxRowsToRead, 1).getValues();
@@ -401,7 +400,8 @@ function getGallonsPumpedOverHours(hours) {
     var rowTime = new Date(timestamps[i][0]);
     if (rowTime >= cutoffTime) {
       var gpm = parseFloat(flowRates[i][0]) || 0;
-      totalGallons += gpm; 
+      // 30 seconds = 0.5 minutes: gallons = GPM * 0.5
+      totalGallons += (gpm * 0.5); 
     } else {
       break; 
     }
@@ -415,7 +415,7 @@ function getGallonsPumpedOverHours(hours) {
 function doGet(e) {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   
-  // Handle opt-in submissions via GET query params if invoked directly or via beacon
+  // Handle opt-in submissions via GET query params
   if (e && e.parameter && (e.parameter.type === "optin" || e.parameter.phone || e.parameter.name)) {
     var mLock = LockService.getScriptLock();
     try {
@@ -436,11 +436,15 @@ function doGet(e) {
     }
   }
 
-  // Dashboard API telemetry responder
   var sheet = ss.getSheetByName("Sheet1");
   var lastRow = sheet.getLastRow();
   
+  var isRawRequested = (e && e.parameter && (e.parameter.type === "flow" || e.parameter.type === "raw" || e.parameter.format === "raw"));
+
   if (lastRow < 2) {
+    if (isRawRequested) {
+      return ContentService.createTextOutput(JSON.stringify([])).setMimeType(ContentService.MimeType.JSON);
+    }
     return ContentService.createTextOutput(JSON.stringify({ error: "No data available" })).setMimeType(ContentService.MimeType.JSON);
   }
 
@@ -455,13 +459,27 @@ function doGet(e) {
   var w1Mins = 0, w3Mins = 0, w4Mins = 0, w5Mins = 0, p1Mins = 0, p2Mins = 0;
   var smallTankValues = [];
   var largeTankValues = [];
+  var rawHistoricalLogs = [];
 
   var alarmTrippedCount = 0;
   var inAlarmState = false;
 
   for (var i = 0; i < dataRange.length; i++) {
-    var rowTime = new Date(dataRange[i][0]);
+    var rawDate = dataRange[i][0];
+    var rowTime = new Date(rawDate);
     
+    // Collect flow samples from the last 24 hours for index.html calculateIntegratedVolume()
+    if (rowTime >= cutoffTime24h) {
+      var gpmFlow = parseFloat(dataRange[i][3]) || 0;
+      // Convert GPM to m3/h so client calculation ((rate * 264.172) / 60) results in exact gallons
+      var m3hFlow = (gpmFlow * 60.0) / M3_TO_GALLONS;
+
+      rawHistoricalLogs.push({
+        timestamp: rowTime.toISOString(),
+        flow_rate: m3hFlow
+      });
+    }
+
     if (rowTime >= cutoffTime30d) {
       var almStatus = dataRange[i][11];
       var isRowTripped = (almStatus === 1 || almStatus === "1" || almStatus === true || almStatus === "TRIPPED");
@@ -477,18 +495,25 @@ function doGet(e) {
     }
 
     if (rowTime >= cutoffTime24h) {
-      if (dataRange[i][5] === 1)  w1Mins++;
-      if (dataRange[i][6] === 1)  w3Mins++;
-      if (dataRange[i][7] === 1)  w4Mins++;
-      if (dataRange[i][8] === 1)  w5Mins++;
-      if (dataRange[i][9] === 1)  p1Mins++;
-      if (dataRange[i][10] === 1) p2Mins++;
+      // 30-second intervals = 0.5 mins per tick
+      if (dataRange[i][5] === 1)  w1Mins += 0.5;
+      if (dataRange[i][6] === 1)  w3Mins += 0.5;
+      if (dataRange[i][7] === 1)  w4Mins += 0.5;
+      if (dataRange[i][8] === 1)  w5Mins += 0.5;
+      if (dataRange[i][9] === 1)  p1Mins += 0.5;
+      if (dataRange[i][10] === 1) p2Mins += 0.5;
 
       var smVal = Number(dataRange[i][1]);
       var lgVal = Number(dataRange[i][2]);
       if (!isNaN(smVal) && smVal > 0) smallTankValues.push(smVal);
       if (!isNaN(lgVal) && lgVal > 0) largeTankValues.push(lgVal);
     }
+  }
+
+  // If index.html calls TUF_GOOGLE_APP_URL with ?type=flow
+  if (isRawRequested) {
+    return ContentService.createTextOutput(JSON.stringify(rawHistoricalLogs))
+                         .setMimeType(ContentService.MimeType.JSON);
   }
 
   var currentSmall = sheet.getRange(lastRow, 2).getValue();
@@ -537,7 +562,7 @@ function compileDailyReportData() {
   var now = new Date();
   var cutoffTime = new Date(now.getTime() - (24 * 60 * 60 * 1000));
   
-  var maxRowsToRead = Math.min(lastRow - 1, 1500); 
+  var maxRowsToRead = Math.min(lastRow - 1, 3000); 
   var startRow = lastRow - maxRowsToRead + 1;
   var dataRange = sheet.getRange(startRow, 1, maxRowsToRead, 12).getValues();
   
@@ -550,13 +575,13 @@ function compileDailyReportData() {
     var rowTime = new Date(dataRange[i][0]);
     if (rowTime >= cutoffTime) {
       actualRowsAnalyzed++;
-      totalGallons += (parseFloat(dataRange[i][3]) || 0);
-      if (dataRange[i][5] === 1)  minutesW1++;
-      if (dataRange[i][6] === 1)  minutesW3++;
-      if (dataRange[i][7] === 1)  minutesW4++;
-      if (dataRange[i][8] === 1)  minutesW5++;
-      if (dataRange[i][9] === 1)  minutesP1++;
-      if (dataRange[i][10] === 1) minutesP2++;
+      totalGallons += ((parseFloat(dataRange[i][3]) || 0) * 0.5);
+      if (dataRange[i][5] === 1)  minutesW1 += 0.5;
+      if (dataRange[i][6] === 1)  minutesW3 += 0.5;
+      if (dataRange[i][7] === 1)  minutesW4 += 0.5;
+      if (dataRange[i][8] === 1)  minutesW5 += 0.5;
+      if (dataRange[i][9] === 1)  minutesP1 += 0.5;
+      if (dataRange[i][10] === 1) minutesP2 += 0.5;
     } else {
       break;
     }
@@ -572,8 +597,8 @@ function compileDailyReportData() {
   
   cacheSheet.appendRow([
     dateString, totalGallons, actualRowsAnalyzed,
-    minutesW1, minutesW3, minutesW4, minutesW5,
-    minutesP1, minutesP2
+    Math.round(minutesW1), Math.round(minutesW3), Math.round(minutesW4), Math.round(minutesW5),
+    Math.round(minutesP1), Math.round(minutesP2)
   ]);
 }
 

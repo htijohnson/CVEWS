@@ -246,12 +246,9 @@
     const MQTT_TOPIC_ACK  = "CVEWS/alarm/ack";
     const M3_TO_GALLONS   = 264.172;
     
-    // Main Telemetry Endpoint (Well runtimes, extremes, alarms)
-    const GOOGLE_WEB_APP_URL = "https://script.google.com/macros/s/AKfycby0tMJYWzvQIr-bqjViqPL8Fs4qridwhoOxA5ZrIZUefblbCPiikQe7u7Zhk8N03dQ/exec";
-    // TUF-2000B Historical Log Endpoint from flowtest.html
-    const TUF_GOOGLE_APP_URL = "https://script.google.com/macros/s/AKfycbwxsJZH_EOo4uYUtws1NBxNu92Ol1dhUhmQVDL4jep9nzn42hbqcQKkpecNoXbrVlc/exec";
+    // Main Telemetry Endpoint (Well runtimes, extremes, alarms, and flow totals)
+    const GOOGLE_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxWMsd8UO4LEE8JvAzZ1AZWaecI9gysj5bRAwoCh6ibXwu3JkRGuYlfGdjA2CANBkU/exec";
 
-    let historicalLogs = [];
     let isAlarmActive = false;
     let isAlarmAckedLocally = false;
     let ackOperatorName = "";
@@ -481,37 +478,7 @@
         closeAckModal();
     }
 
-    // Integrated Volume Calculation using Trapezoidal Rule from flowtest.html
-    function calculateIntegratedVolume(startTimeMs, endTimeMs) {
-        const filtered = historicalLogs.filter(row => {
-            const t = new Date(row.timestamp).getTime();
-            return t >= startTimeMs && t <= endTimeMs;
-        });
-
-        if (filtered.length < 2) return "0";
-
-        let totalM3 = 0;
-        for (let i = 1; i < filtered.length; i++) {
-            const tPrev = new Date(filtered[i - 1].timestamp).getTime();
-            const tCurr = new Date(filtered[i].timestamp).getTime();
-            
-            const ratePrev = parseFloat(filtered[i - 1].flow_rate) || 0;
-            const rateCurr = parseFloat(filtered[i].flow_rate) || 0;
-
-            const deltaHours = (tCurr - tPrev) / (1000 * 3600);
-
-            if (deltaHours > 0 && deltaHours < 2) {
-                const segmentVolumeM3 = ((ratePrev + rateCurr) / 2) * deltaHours;
-                totalM3 += segmentVolumeM3;
-            }
-        }
-
-        const totalGallons = totalM3 * M3_TO_GALLONS;
-        return Math.round(totalGallons).toLocaleString();
-    }
-
     async function updateHistoricalLCDs() {
-        // Fetch Main Telemetry History (Pump hours, extremes, alarms)
         try {
             const response = await fetch(GOOGLE_WEB_APP_URL);
             const data = await response.json();
@@ -529,25 +496,17 @@
                 document.getElementById("smMax").innerText = Math.round(data.sm_max).toLocaleString();
                 document.getElementById("lgMin").innerText = Math.round(data.lg_min).toLocaleString();
                 document.getElementById("lgMax").innerText = Math.round(data.lg_max).toLocaleString();
+
+                // Direct mapping to server-calculated totals
+                if (data.pumped_1h !== undefined) {
+                    document.getElementById("lcd1h").innerText = Number(data.pumped_1h).toLocaleString();
+                    document.getElementById("lcd6h").innerText = Number(data.pumped_6h).toLocaleString();
+                    document.getElementById("lcd12h").innerText = Number(data.pumped_12h).toLocaleString();
+                    document.getElementById("lcd24h").innerText = Number(data.pumped_24h).toLocaleString();
+                }
             }
         } catch(e) { 
             console.error("Telemetry history engine sync failed:", e); 
-        }
-
-        // Fetch TUF Flow History & Calculate Total Volumetric Yield from flowtest
-        try {
-            const tufRes = await fetch(TUF_GOOGLE_APP_URL);
-            historicalLogs = await tufRes.json();
-
-            if (Array.isArray(historicalLogs) && historicalLogs.length > 0) {
-                const now = new Date().getTime();
-                document.getElementById("lcd1h").innerText = calculateIntegratedVolume(now - (1 * 3600 * 1000), now);
-                document.getElementById("lcd6h").innerText = calculateIntegratedVolume(now - (6 * 3600 * 1000), now);
-                document.getElementById("lcd12h").innerText = calculateIntegratedVolume(now - (12 * 3600 * 1000), now);
-                document.getElementById("lcd24h").innerText = calculateIntegratedVolume(now - (24 * 3600 * 1000), now);
-            }
-        } catch(e) {
-            console.error("TUF volumetric flow calculation sync failed:", e);
         }
     }
 
