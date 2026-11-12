@@ -284,7 +284,7 @@ function doPost(e) {
                            .setMimeType(ContentService.MimeType.JSON);
     }
 
-    // Standard Telemetry Logging to Sheet1
+    // Standard Telemetry Logging to Sheet1 (Columns A-L: data, Columns M-O: device, ip, version)
     var sheet = ss.getSheetByName("Sheet1");
     if (!sheet) {
       sheet = ss.insertSheet("Sheet1");
@@ -302,7 +302,10 @@ function doPost(e) {
       payloadData.w5 ? 1 : 0,
       payloadData.p1 ? 1 : 0,
       payloadData.p2 ? 1 : 0,
-      payloadData.alm ? 1 : 0
+      payloadData.alm ? 1 : 0,
+      payloadData.device || "Lower Pumphouse",
+      payloadData.ip || "",
+      payloadData.version || ""
     ];
     
     sheet.appendRow(logRow);
@@ -493,7 +496,7 @@ function doGet(e) {
   
   var maxRowsToRead = Math.min(lastRow - 1, 50000); 
   var startRow = lastRow - maxRowsToRead + 1;
-  var dataRange = sheet.getRange(startRow, 1, maxRowsToRead, 12).getValues();
+  var dataRange = sheet.getRange(startRow, 1, maxRowsToRead, 15).getValues();
 
   var w1Mins = 0, w3Mins = 0, w4Mins = 0, w5Mins = 0, p1Mins = 0, p2Mins = 0;
   var smallTankValues = [];
@@ -507,7 +510,7 @@ function doGet(e) {
     var rawDate = dataRange[i][0];
     var rowTime = new Date(rawDate);
     
-    // Collect flow samples from the last 24 hours for index.html calculateIntegratedVolume()
+    // Collect flow samples from the last 24 hours for calculateIntegratedVolume()
     if (rowTime >= cutoffTime24h) {
       var gpmFlow = parseFloat(dataRange[i][3]) || 0;
       // Convert GPM to m3/h so client calculation ((rate * 264.172) / 60) results in exact gallons
@@ -549,14 +552,15 @@ function doGet(e) {
     }
   }
 
-  // If index.html calls TUF_GOOGLE_APP_URL with ?type=flow
+  // If caller requests ?type=flow
   if (isRawRequested) {
     return ContentService.createTextOutput(JSON.stringify(rawHistoricalLogs))
                          .setMimeType(ContentService.MimeType.JSON);
   }
 
-  var currentSmall = sheet.getRange(lastRow, 2).getValue();
-  var currentLarge = sheet.getRange(lastRow, 3).getValue();
+  var latestRow = dataRange[dataRange.length - 1];
+  var currentSmall = latestRow[1];
+  var currentLarge = latestRow[2];
   
   var smMin = smallTankValues.length ? Math.min.apply(null, smallTankValues) : currentSmall;
   var smMax = smallTankValues.length ? Math.max.apply(null, smallTankValues) : currentSmall;
@@ -564,11 +568,21 @@ function doGet(e) {
   var lgMax = largeTankValues.length ? Math.max.apply(null, largeTankValues) : currentLarge;
   
   var data = {
-    "timestamp": Utilities.formatDate(new Date(sheet.getRange(lastRow, 1).getValue()), Session.getScriptTimeZone(), "MM/dd HH:mm:ss"),
+    "timestamp": Utilities.formatDate(new Date(latestRow[0]), Session.getScriptTimeZone(), "MM/dd HH:mm:ss"),
+    "device":    latestRow[12] ? String(latestRow[12]) : "Lower Pumphouse",
+    "ip":        latestRow[13] ? String(latestRow[13]) : "",
+    "version":   latestRow[14] ? String(latestRow[14]) : "",
     "tk_sm":     currentSmall,
     "tk_lg":     currentLarge,
-    "flow":      sheet.getRange(lastRow, 4).getValue(),
-    "cl2":       sheet.getRange(lastRow, 5).getValue(),
+    "flow":      latestRow[3],
+    "cl2":       latestRow[4],
+    "w1":        latestRow[5],
+    "w3":        latestRow[6],
+    "w4":        latestRow[7],
+    "w5":        latestRow[8],
+    "p1":        latestRow[9],
+    "p2":        latestRow[10],
+    "alm":       latestRow[11],
     "pumped_1h":  getGallonsPumpedOverHours(1),
     "pumped_6h":  getGallonsPumpedOverHours(6),
     "pumped_12h": getGallonsPumpedOverHours(12),

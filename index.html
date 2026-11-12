@@ -254,45 +254,26 @@
 </div>
 
 <script>
-    // EMQX Cloud Serverless WebSocket Configuration
+    // EMQX Cloud Serverless WebSocket Configuration (Alarm Status & Ack Only)
     const MQTT_HOST = "w41a38d3.ala.us-east-1.emqxsl.com"; 
     const MQTT_PORT = 8084;
     const MQTT_PATH = "/mqtt";
     
     // EMQX Credentials
-    const MQTT_USER = "CVEWSTelemetry"; 
-    const MQTT_PASS = "Water123!";  
+    const MQTT_USER = "CVEWS_Web_Dash"; 
+    const MQTT_PASS = "Water321!";  
     
-    // Unified Topic Namespace
-    const MQTT_TOPIC_LIVE    = "cvews/lowerpumphouse/telemetry";
-    const MQTT_TOPIC_STATUS  = "cvews/lowerpumphouse/status";
-    const MQTT_TOPIC_ACK     = "cvews/lowerpumphouse/alarm/ack";
-    const MQTT_TOPIC_VERSION = "cvews/lowerpumphouse/version";
-    const M3_TO_GALLONS      = 264.172;
+    // MQTT Topics (Alarm Status & Acknowledgment)
+    const MQTT_TOPIC_LIVE   = "cvews/lowerpumphouse/telemetry";
+    const MQTT_TOPIC_STATUS = "cvews/lowerpumphouse/status";
+    const MQTT_TOPIC_ACK    = "cvews/lowerpumphouse/alarm/ack";
     
-    // Main Telemetry Endpoint (Well runtimes, extremes, alarms, and flow totals)
+    // Google Apps Script Endpoint (All Gauges, Relays, Totals, Extremes, IP, and Version)
     const GOOGLE_WEB_APP_URL = "https://script.google.com/macros/s/AKfycbxWMsd8UO4LEE8JvAzZ1AZWaecI9gysj5bRAwoCh6ibXwu3JkRGuYlfGdjA2CANBkU/exec";
 
     let isAlarmActive = false;
     let isAlarmAckedLocally = false;
     let ackOperatorName = "";
-
-    // 3-Second Rolling Window Buffer for TUF-2000B Flow Rate
-    let flowReadingsWindow = [];
-    const FLOW_AVERAGE_WINDOW_MS = 3000;
-
-    function recordAndGetSmoothedFlow(currentGpm) {
-        const now = Date.now();
-        flowReadingsWindow.push({ timestamp: now, value: currentGpm });
-
-        // Retain only samples within the past 3 seconds
-        flowReadingsWindow = flowReadingsWindow.filter(item => (now - item.timestamp) <= FLOW_AVERAGE_WINDOW_MS);
-
-        if (flowReadingsWindow.length === 0) return currentGpm;
-
-        const sum = flowReadingsWindow.reduce((acc, curr) => acc + curr.value, 0);
-        return sum / flowReadingsWindow.length;
-    }
 
     const client = new Paho.MQTT.Client(MQTT_HOST, Number(MQTT_PORT), MQTT_PATH, "CVEWS_WebDash_" + Math.random().toString(16).substr(2, 8));
 
@@ -302,18 +283,9 @@
         setTimeout(connectBroker, 4000);
     };
 
+    // MQTT handles ONLY real-time Alarm Status (Banner + Alarm Light) and LWT Offline status
     client.onMessageArrived = (message) => {
         try {
-            // Check for direct retained string version update
-            if (message.destinationName === MQTT_TOPIC_VERSION) {
-                const verText = message.payloadString.trim();
-                if (verText) {
-                    document.getElementById("nodeVersion").innerText = "v" + verText;
-                }
-                return;
-            }
-
-            // Check for plain string LWT / status updates
             if (message.destinationName === MQTT_TOPIC_STATUS) {
                 if (message.payloadString === "offline") {
                     document.getElementById("alarmBanner").className = "alarm-banner";
@@ -322,128 +294,38 @@
                 return;
             }
 
-            const data = JSON.parse(message.payloadString);
-
-            // Update footer device title and version from incoming telemetry
-            if (data.device) {
-                document.getElementById("nodeTitle").innerText = data.device;
-            }
-            if (data.version) {
-                document.getElementById("nodeVersion").innerText = "v" + data.version;
-            }
-
-            // Dynamically update the local IP link when published by ESP32
-            if (data.ip) {
-                const ipLink = document.getElementById("localIpLink");
-                ipLink.href = "http://" + data.ip + "/";
-                ipLink.innerText = "http://" + data.ip + "/";
-            }
-
-            if (data.flow_rate !== undefined) {
-                const rawGpm = (data.flow_rate * M3_TO_GALLONS) / 60;
-                const smoothedGpm = recordAndGetSmoothedFlow(rawGpm);
-                updateFlowGauge(smoothedGpm);
-                return;
-            }
-
-            if (data.tk_sm !== undefined) {
-                const maxSmall = 4100;
-                const pctSmall = Math.min(Math.max((data.tk_sm / maxSmall) * 100, 0), 100);
-                document.getElementById("valSmall").innerHTML = Math.round(data.tk_sm).toLocaleString() + ' <span style="font-size: 16px; color:#a0aec0;">GAL</span>';
-                const degSmall = -180 + (pctSmall * 1.8);
-                document.getElementById("fillSmall").style.transform = `rotate(${degSmall}deg)`;
-                
-                const cardSmall = document.getElementById("cardSmall");
-                const fillSmall = document.getElementById("fillSmall");
-                if (pctSmall < 33.33) {
-                    cardSmall.className = "sensor-card gauge-card warning-critical-1_3";
-                    fillSmall.style.backgroundColor = "#e53e3e"; 
-                } else if (pctSmall < 66.66) {
-                    cardSmall.className = "sensor-card gauge-card warning-low-2_3";
-                    fillSmall.style.backgroundColor = "#d69e2e"; 
-                } else {
-                    cardSmall.className = "sensor-card gauge-card";
-                    fillSmall.style.backgroundColor = "#3182ce"; 
+            if (message.destinationName === MQTT_TOPIC_LIVE) {
+                const data = JSON.parse(message.payloadString);
+                if (data.alm !== undefined) {
+                    updateAlarmStatusUI(data.alm);
                 }
             }
-
-            if (data.tk_lg !== undefined) {
-                const maxLarge = 71000;
-                const pctLarge = Math.min(Math.max((data.tk_lg / maxLarge) * 100, 0), 100);
-                document.getElementById("valLarge").innerHTML = Math.round(data.tk_lg).toLocaleString() + ' <span style="font-size: 16px; color:#a0aec0;">GAL</span>';
-                const degLarge = -180 + (pctLarge * 1.8);
-                document.getElementById("fillLarge").style.transform = `rotate(${degLarge}deg)`;
-                
-                const cardLarge = document.getElementById("cardLarge");
-                const fillLarge = document.getElementById("fillLarge");
-                if (pctLarge < 33.33) {
-                    cardLarge.className = "sensor-card gauge-card warning-critical-1_3";
-                    fillLarge.style.backgroundColor = "#e53e3e"; 
-                } else if (pctLarge < 66.66) {
-                    cardLarge.className = "sensor-card gauge-card warning-low-2_3";
-                    fillLarge.style.backgroundColor = "#d69e2e"; 
-                } else {
-                    cardLarge.className = "sensor-card gauge-card";
-                    fillLarge.style.backgroundColor = "#31ac87"; 
-                }
-            }
-
-            if (data.flow !== undefined) {
-                const smoothedGpm = recordAndGetSmoothedFlow(parseFloat(data.flow) || 0.0);
-                updateFlowGauge(smoothedGpm);
-            }
-
-            if (data.cl2 !== undefined) {
-                const maxCl2 = 2.0; 
-                const pctCl2 = Math.min(Math.max((data.cl2 / maxCl2) * 100, 0), 100);
-                document.getElementById("valCl2").innerHTML = data.cl2.toFixed(2) + ' <span style="font-size: 16px; color:#a0aec0;">mg/L</span>';
-                const degCl2 = -180 + (pctCl2 * 1.8);
-                document.getElementById("fillCl2").style.transform = `rotate(${degCl2}deg)`;
-
-                const cardCl2 = document.getElementById("cardCl2");
-                const fillCl2 = document.getElementById("fillCl2");
-
-                if (data.cl2 > 1.00 || data.cl2 === 0.00) { 
-                    cardCl2.className = "sensor-card gauge-card warning-critical-1_3";
-                    fillCl2.style.backgroundColor = "#e53e3e";
-                } else if (data.cl2 > 0.00 && data.cl2 < 0.20) {
-                    cardCl2.className = "sensor-card gauge-card warning-low-2_3";
-                    fillCl2.style.backgroundColor = "#d69e2e"; 
-                } else {
-                    cardCl2.className = "sensor-card gauge-card";
-                    fillCl2.style.backgroundColor = "#38a169"; 
-                }
-            }
-
-            toggleBadge("badgeW1", data.w1, "active-green", "Running", "Not Running");
-            toggleBadge("badgeW3", data.w3, "active-green", "Running", "Not Running");
-            toggleBadge("badgeW4", data.w4, "active-green", "Running", "Not Running");
-            toggleBadge("badgeW5", data.w5, "active-green", "Running", "Not Running");
-            toggleBadge("badgeP1", data.p1, "active-blue", "Active", "Idle");
-            toggleBadge("badgeP2", data.p2, "active-blue", "Active", "Idle");
-            toggleBadge("badgeAlm", data.alm, "active-red", "Tripped", "Clear");
-
-            const banner = document.getElementById("alarmBanner");
-            const tripped = (data.alm === 1 || data.alm === "1" || data.alm === "TRIPPED");
-
-            if (tripped) {
-                isAlarmActive = true;
-                if (isAlarmAckedLocally) {
-                    banner.className = "alarm-banner alarm-acknowledged";
-                    banner.innerText = "ALARM ACKNOWLEDGED (" + (ackOperatorName || "OPERATOR") + ") - INVESTIGATING";
-                } else {
-                    banner.className = "alarm-banner alarm-active";
-                    banner.innerText = "⚠️ SYSTEM ALARM ACTIVE - CLICK TO ACKNOWLEDGE ⚠️";
-                }
-            } else {
-                isAlarmActive = false;
-                isAlarmAckedLocally = false;
-                ackOperatorName = "";
-                banner.className = "alarm-banner alarm-normal";
-                banner.innerText = "SECURED LINK ESTABLISHED - SYSTEM OK";
-            }
-        } catch(e) { console.error("Data mapping error.", e); }
+        } catch(e) { console.error("MQTT alarm mapping error.", e); }
     };
+
+    function updateAlarmStatusUI(almVal) {
+        toggleBadge("badgeAlm", almVal, "active-red", "Tripped", "Clear");
+
+        const banner = document.getElementById("alarmBanner");
+        const tripped = (almVal === 1 || almVal === "1" || almVal === true || almVal === "TRIPPED");
+
+        if (tripped) {
+            isAlarmActive = true;
+            if (isAlarmAckedLocally) {
+                banner.className = "alarm-banner alarm-acknowledged";
+                banner.innerText = "ALARM ACKNOWLEDGED (" + (ackOperatorName || "OPERATOR") + ") - INVESTIGATING";
+            } else {
+                banner.className = "alarm-banner alarm-active";
+                banner.innerText = "⚠️ SYSTEM ALARM ACTIVE - CLICK TO ACKNOWLEDGE ⚠️";
+            }
+        } else {
+            isAlarmActive = false;
+            isAlarmAckedLocally = false;
+            ackOperatorName = "";
+            banner.className = "alarm-banner alarm-normal";
+            banner.innerText = "SECURED LINK ESTABLISHED - SYSTEM OK";
+        }
+    }
 
     function updateFlowGauge(gpmVal) {
         const maxFlow = 100; 
@@ -479,7 +361,7 @@
         }
     }
 
-    // Modal Control & Alarm Acknowledgment
+    // Modal Control & Alarm Acknowledgment (Publishes via MQTT)
     const alarmBanner = document.getElementById("alarmBanner");
     alarmBanner.addEventListener("click", () => {
         if (isAlarmActive && !isAlarmAckedLocally) {
@@ -526,11 +408,111 @@
         closeAckModal();
     }
 
-    async function updateHistoricalLCDs() {
+    // Google Apps Script handles all Gauges, Relays, Totals, Extremes, IP, and Firmware Version
+    async function syncFromGoogleScript() {
         try {
             const response = await fetch(GOOGLE_WEB_APP_URL);
             const data = await response.json();
-            
+
+            if (data.error) return;
+
+            // Node Metadata (Fetched from Sheet1 columns M, N, O)
+            if (data.device) {
+                document.getElementById("nodeTitle").innerText = data.device;
+            }
+            if (data.version) {
+                document.getElementById("nodeVersion").innerText = "v" + data.version;
+            }
+            if (data.ip) {
+                const ipLink = document.getElementById("localIpLink");
+                ipLink.href = "http://" + data.ip + "/";
+                ipLink.innerText = "http://" + data.ip + "/";
+            }
+
+            // Small Tank Gauge
+            if (data.tk_sm !== undefined) {
+                const tkSm = Number(data.tk_sm) || 0;
+                const maxSmall = 4100;
+                const pctSmall = Math.min(Math.max((tkSm / maxSmall) * 100, 0), 100);
+                document.getElementById("valSmall").innerHTML = Math.round(tkSm).toLocaleString() + ' <span style="font-size: 16px; color:#a0aec0;">GAL</span>';
+                const degSmall = -180 + (pctSmall * 1.8);
+                document.getElementById("fillSmall").style.transform = `rotate(${degSmall}deg)`;
+                
+                const cardSmall = document.getElementById("cardSmall");
+                const fillSmall = document.getElementById("fillSmall");
+                if (pctSmall < 33.33) {
+                    cardSmall.className = "sensor-card gauge-card warning-critical-1_3";
+                    fillSmall.style.backgroundColor = "#e53e3e"; 
+                } else if (pctSmall < 66.66) {
+                    cardSmall.className = "sensor-card gauge-card warning-low-2_3";
+                    fillSmall.style.backgroundColor = "#d69e2e"; 
+                } else {
+                    cardSmall.className = "sensor-card gauge-card";
+                    fillSmall.style.backgroundColor = "#3182ce"; 
+                }
+            }
+
+            // Large Tank Gauge
+            if (data.tk_lg !== undefined) {
+                const tkLg = Number(data.tk_lg) || 0;
+                const maxLarge = 71000;
+                const pctLarge = Math.min(Math.max((tkLg / maxLarge) * 100, 0), 100);
+                document.getElementById("valLarge").innerHTML = Math.round(tkLg).toLocaleString() + ' <span style="font-size: 16px; color:#a0aec0;">GAL</span>';
+                const degLarge = -180 + (pctLarge * 1.8);
+                document.getElementById("fillLarge").style.transform = `rotate(${degLarge}deg)`;
+                
+                const cardLarge = document.getElementById("cardLarge");
+                const fillLarge = document.getElementById("fillLarge");
+                if (pctLarge < 33.33) {
+                    cardLarge.className = "sensor-card gauge-card warning-critical-1_3";
+                    fillLarge.style.backgroundColor = "#e53e3e"; 
+                } else if (pctLarge < 66.66) {
+                    cardLarge.className = "sensor-card gauge-card warning-low-2_3";
+                    fillLarge.style.backgroundColor = "#d69e2e"; 
+                } else {
+                    cardLarge.className = "sensor-card gauge-card";
+                    fillLarge.style.backgroundColor = "#31ac87"; 
+                }
+            }
+
+            // Flow Gauge
+            if (data.flow !== undefined) {
+                updateFlowGauge(parseFloat(data.flow) || 0.0);
+            }
+
+            // Chlorine Gauge
+            if (data.cl2 !== undefined) {
+                const cl2Val = Number(data.cl2) || 0;
+                const maxCl2 = 2.0; 
+                const pctCl2 = Math.min(Math.max((cl2Val / maxCl2) * 100, 0), 100);
+                document.getElementById("valCl2").innerHTML = cl2Val.toFixed(2) + ' <span style="font-size: 16px; color:#a0aec0;">mg/L</span>';
+                const degCl2 = -180 + (pctCl2 * 1.8);
+                document.getElementById("fillCl2").style.transform = `rotate(${degCl2}deg)`;
+
+                const cardCl2 = document.getElementById("cardCl2");
+                const fillCl2 = document.getElementById("fillCl2");
+
+                if (cl2Val > 1.00 || cl2Val === 0.00) { 
+                    cardCl2.className = "sensor-card gauge-card warning-critical-1_3";
+                    fillCl2.style.backgroundColor = "#e53e3e";
+                } else if (cl2Val > 0.00 && cl2Val < 0.20) {
+                    cardCl2.className = "sensor-card gauge-card warning-low-2_3";
+                    fillCl2.style.backgroundColor = "#d69e2e"; 
+                } else {
+                    cardCl2.className = "sensor-card gauge-card";
+                    fillCl2.style.backgroundColor = "#38a169"; 
+                }
+            }
+
+            // Live Well & Booster States (Note: Alarm light #badgeAlm remains controlled by MQTT)
+            toggleBadge("badgeW1", data.w1, "active-green", "Running", "Not Running");
+            toggleBadge("badgeW3", data.w3, "active-green", "Running", "Not Running");
+            toggleBadge("badgeW4", data.w4, "active-green", "Running", "Not Running");
+            toggleBadge("badgeW5", data.w5, "active-green", "Running", "Not Running");
+            toggleBadge("badgeP1", data.p1, "active-blue", "Active", "Idle");
+            toggleBadge("badgeP2", data.p2, "active-blue", "Active", "Idle");
+
+            // 24H Runtimes, Extremes, and 30D Alarm Count
             if (data.w1_24h !== undefined) {
                 document.getElementById("runW1").innerText = data.w1_24h;
                 document.getElementById("runW3").innerText = data.w3_24h;
@@ -545,7 +527,7 @@
                 document.getElementById("lgMin").innerText = Math.round(data.lg_min).toLocaleString();
                 document.getElementById("lgMax").innerText = Math.round(data.lg_max).toLocaleString();
 
-                // Direct mapping to server-calculated totals
+                // Volumetric Yield LCDs
                 if (data.pumped_1h !== undefined) {
                     document.getElementById("lcd1h").innerText = Number(data.pumped_1h).toLocaleString();
                     document.getElementById("lcd6h").innerText = Number(data.pumped_6h).toLocaleString();
@@ -554,7 +536,7 @@
                 }
             }
         } catch(e) { 
-            console.error("Telemetry history engine sync failed:", e); 
+            console.error("Google Script telemetry sync failed:", e); 
         }
     }
 
@@ -565,7 +547,6 @@
                 document.getElementById("alarmBanner").innerText = "SECURED LINK ESTABLISHED - TUNED IN";
                 client.subscribe(MQTT_TOPIC_LIVE);
                 client.subscribe(MQTT_TOPIC_STATUS);
-                client.subscribe(MQTT_TOPIC_VERSION);
             },
             onFailure: (err) => { 
                 setTimeout(connectBroker, 5000); 
@@ -577,8 +558,8 @@
     }
 
     connectBroker();
-    updateHistoricalLCDs();
-    setInterval(updateHistoricalLCDs, 60000); 
+    syncFromGoogleScript();
+    setInterval(syncFromGoogleScript, 15000); 
 </script>
 </body>
 </html>
