@@ -47,11 +47,21 @@
         .warning-low-2_3 .gauge-cover { background-color: #312a1d; }
         .warning-critical-1_3 .gauge-cover { background-color: #3a1c1c; }
 
-        .lcd-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; margin-bottom: 40px; }
+        .lcd-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 20px; margin-bottom: 10px; }
         .lcd-card { background-color: #0f1115; border: 3px solid #2d3748; border-radius: 6px; padding: 15px; box-shadow: inset 0 0 10px rgba(0,0,0,0.8); }
         .lcd-display { background-color: #101a14; border: 2px solid #050806; border-radius: 4px; padding: 10px; text-align: right; box-shadow: inset 0 2px 5px rgba(0,0,0,0.5); }
         .lcd-value { font-family: 'Orbitron', monospace; font-size: 28px; color: #39ff14; text-shadow: 0 0 6px rgba(57, 255, 20, 0.6); letter-spacing: 1px; }
         .lcd-unit { font-size: 11px; color: #4a5d4e; text-transform: uppercase; font-weight: bold; margin-top: 4px; }
+
+        .yield-report-link-box { text-align: right; margin-bottom: 35px; }
+        .yield-report-link-box a { color: #63b3ed; font-size: 13px; text-decoration: underline; font-weight: 600; cursor: pointer; }
+        .yield-report-link-box a:hover { color: #90cdf4; }
+
+        .report-table-wrap { max-height: 300px; overflow-y: auto; border: 1px solid #2d3748; border-radius: 6px; margin-top: 15px; background: #1a1e24; }
+        .report-table { width: 100%; border-collapse: collapse; font-size: 13px; }
+        .report-table th { background: #2d3748; color: #cbd5e0; text-align: left; padding: 8px 12px; position: sticky; top: 0; font-size: 11px; text-transform: uppercase; }
+        .report-table td { padding: 7px 12px; border-bottom: 1px solid #2d3748; font-family: monospace; color: #e2e8f0; }
+        .report-table tr:nth-child(even) { background: #1f242c; }
 
         .indicator-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 15px; }
         .status-badge { background-color: #232934; border: 1px solid #2d3748; border-radius: 6px; padding: 15px 10px; text-align: center; transition: all 0.3s ease; }
@@ -180,6 +190,9 @@
             <div class="lcd-display"><div id="lcd24h" class="lcd-value">---,---</div><div class="lcd-unit">Total Gallons</div></div>
         </div>
     </div>
+    <div class="yield-report-link-box">
+        <a onclick="openYieldReportModal()">Pull Custom Volumetric Yield Report &raquo;</a>
+    </div>
 
     <div class="section-title">Relay Monitoring Interfaces (120V AC Input Status)</div>
     <div class="indicator-grid">
@@ -253,6 +266,63 @@
     </div>
 </div>
 
+<!-- Modal Prompt for Total Volumetric Yield Report -->
+<div id="yieldReportModal" style="display:none; position:fixed; z-index:9999; top:0; left:0; width:100%; height:100%; background:rgba(0,0,0,0.75); justify-content:center; align-items:center; padding:15px;">
+    <div style="background:#232934; border:2px solid #4299e1; border-radius:8px; padding:25px; width:100%; max-width:680px; box-shadow:0 0 25px rgba(0,0,0,0.85); max-height:92vh; overflow-y:auto;">
+        <h3 style="color:#63b3ed; margin-bottom:15px; text-align:center; letter-spacing:1px;">VOLUMETRIC YIELD REPORT</h3>
+        
+        <div style="display:grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap:12px; margin-bottom:15px;">
+            <div>
+                <label style="display:block; font-size:12px; color:#a0aec0; margin-bottom:4px;">Start Date &amp; Time:</label>
+                <input id="reportStart" type="datetime-local" style="width:100%; padding:8px; border-radius:4px; border:1px solid #4a5568; background:#1a1e24; color:#fff; color-scheme: dark;" />
+            </div>
+            <div>
+                <label style="display:block; font-size:12px; color:#a0aec0; margin-bottom:4px;">End Date &amp; Time:</label>
+                <input id="reportEnd" type="datetime-local" style="width:100%; padding:8px; border-radius:4px; border:1px solid #4a5568; background:#1a1e24; color:#fff; color-scheme: dark;" />
+            </div>
+            <div>
+                <label style="display:block; font-size:12px; color:#a0aec0; margin-bottom:4px;">Resolution:</label>
+                <select id="reportResolution" style="width:100%; padding:8px; border-radius:4px; border:1px solid #4a5568; background:#1a1e24; color:#fff;">
+                    <option value="minute">Minute</option>
+                    <option value="hourly" selected>Hourly</option>
+                    <option value="daily">Daily</option>
+                </select>
+            </div>
+        </div>
+
+        <div style="display:flex; justify-content:space-between; align-items:center; flex-wrap:wrap; gap:10px; margin-bottom:15px;">
+            <div>
+                <button onclick="closeYieldReportModal()" style="padding:8px 16px; background:#4a5568; color:#fff; border:none; border-radius:4px; cursor:pointer;">Close</button>
+            </div>
+            <div style="display:flex; gap:10px;">
+                <button id="btnDownloadCsv" onclick="downloadYieldCsv()" style="display:none; padding:8px 16px; background:#38a169; color:#fff; font-weight:bold; border:none; border-radius:4px; cursor:pointer;">Export CSV</button>
+                <button id="btnRunReport" onclick="fetchYieldReport()" style="padding:8px 18px; background:#3182ce; color:#fff; font-weight:bold; border:none; border-radius:4px; cursor:pointer;">Generate Report</button>
+            </div>
+        </div>
+
+        <div id="reportStatus" style="font-size:13px; color:#cbd5e0; text-align:center; margin-bottom:10px;"></div>
+
+        <div id="reportResultsArea" style="display:none;">
+            <div style="background:#0f1115; border:2px solid #2d3748; border-radius:6px; padding:12px; display:flex; justify-content:space-between; align-items:center;">
+                <span style="font-size:13px; color:#a0aec0; text-transform:uppercase;">Period Total Volumetric Yield:</span>
+                <span id="reportGrandTotal" style="font-family:'Orbitron', monospace; font-size:22px; color:#39ff14; text-shadow:0 0 6px rgba(57,255,20,0.5);">0 GAL</span>
+            </div>
+            <div class="report-table-wrap">
+                <table class="report-table">
+                    <thead>
+                        <tr>
+                            <th>Interval Start</th>
+                            <th>Avg Flow (GPM)</th>
+                            <th>Total Gallons</th>
+                        </tr>
+                    </thead>
+                    <tbody id="reportTableBody"></tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+
 <script>
     // EMQX Cloud Serverless WebSocket Configuration (Alarm Status & Ack Only)
     const MQTT_HOST = "w41a38d3.ala.us-east-1.emqxsl.com"; 
@@ -274,6 +344,7 @@
     let isAlarmActive = false;
     let isAlarmAckedLocally = false;
     let ackOperatorName = "";
+    let lastReportRows = [];
 
     const client = new Paho.MQTT.Client(MQTT_HOST, Number(MQTT_PORT), MQTT_PATH, "CVEWS_WebDash_" + Math.random().toString(16).substr(2, 8));
 
@@ -406,6 +477,128 @@
         banner.innerText = "ALARM ACKNOWLEDGED (" + ackOperatorName + ") - INVESTIGATING";
 
         closeAckModal();
+    }
+
+    // Volumetric Yield Report Modal Logic
+    function toLocalDatetimeInputString(dateObj) {
+        const pad = (n) => String(n).padStart(2, "0");
+        return dateObj.getFullYear() + "-" +
+               pad(dateObj.getMonth() + 1) + "-" +
+               pad(dateObj.getDate()) + "T" +
+               pad(dateObj.getHours()) + ":" +
+               pad(dateObj.getMinutes());
+    }
+
+    function openYieldReportModal() {
+        const startInput = document.getElementById("reportStart");
+        const endInput = document.getElementById("reportEnd");
+        if (!startInput.value || !endInput.value) {
+            const now = new Date();
+            const yesterday = new Date(now.getTime() - (24 * 60 * 60 * 1000));
+            endInput.value = toLocalDatetimeInputString(now);
+            startInput.value = toLocalDatetimeInputString(yesterday);
+        }
+        document.getElementById("yieldReportModal").style.display = "flex";
+    }
+
+    function closeYieldReportModal() {
+        document.getElementById("yieldReportModal").style.display = "none";
+    }
+
+    async function fetchYieldReport() {
+        const startVal = document.getElementById("reportStart").value;
+        const endVal = document.getElementById("reportEnd").value;
+        const resolution = document.getElementById("reportResolution").value;
+        const statusEl = document.getElementById("reportStatus");
+        const resultsArea = document.getElementById("reportResultsArea");
+        const btnRun = document.getElementById("btnRunReport");
+        const btnCsv = document.getElementById("btnDownloadCsv");
+
+        if (!startVal || !endVal) {
+            alert("Please select both a start and end date/time.");
+            return;
+        }
+
+        const startDate = new Date(startVal);
+        const endDate = new Date(endVal);
+        if (isNaN(startDate.getTime()) || isNaN(endDate.getTime()) || startDate >= endDate) {
+            alert("End date/time must be after start date/time.");
+            return;
+        }
+
+        btnRun.disabled = true;
+        btnRun.innerText = "Querying...";
+        btnCsv.style.display = "none";
+        resultsArea.style.display = "none";
+        statusEl.style.color = "#63b3ed";
+        statusEl.innerText = "Fetching and aggregating flow history from database...";
+
+        try {
+            const queryUrl = GOOGLE_WEB_APP_URL +
+                "?type=yield_report" +
+                "&start=" + encodeURIComponent(startDate.toISOString()) +
+                "&end=" + encodeURIComponent(endDate.toISOString()) +
+                "&resolution=" + encodeURIComponent(resolution);
+
+            const response = await fetch(queryUrl);
+            const result = await response.json();
+
+            if (result.error) {
+                statusEl.style.color = "#fc8181";
+                statusEl.innerText = "Error: " + result.error;
+                return;
+            }
+
+            lastReportRows = result.rows || [];
+            document.getElementById("reportGrandTotal").innerText = Math.round(result.total_gallons || 0).toLocaleString() + " GAL";
+
+            const tbody = document.getElementById("reportTableBody");
+            tbody.innerHTML = "";
+
+            if (lastReportRows.length === 0) {
+                statusEl.style.color = "#d69e2e";
+                statusEl.innerText = "No telemetry records found for the selected timeframe.";
+                return;
+            }
+
+            lastReportRows.forEach((row) => {
+                const tr = document.createElement("tr");
+                tr.innerHTML =
+                    "<td>" + row.period + "</td>" +
+                    "<td>" + Number(row.avg_gpm).toFixed(1) + "</td>" +
+                    "<td>" + Math.round(row.gallons).toLocaleString() + "</td>";
+                tbody.appendChild(tr);
+            });
+
+            statusEl.innerText = "";
+            resultsArea.style.display = "block";
+            btnCsv.style.display = "inline-block";
+        } catch (err) {
+            console.error("Yield report fetch failed:", err);
+            statusEl.style.color = "#fc8181";
+            statusEl.innerText = "Failed to retrieve report. Please try again.";
+        } finally {
+            btnRun.disabled = false;
+            btnRun.innerText = "Generate Report";
+        }
+    }
+
+    function downloadYieldCsv() {
+        if (!lastReportRows || lastReportRows.length === 0) return;
+        const resolution = document.getElementById("reportResolution").value;
+        const lines = ["Interval Start,Avg Flow (GPM),Total Gallons"];
+        lastReportRows.forEach((r) => {
+            lines.push('"' + r.period + '",' + Number(r.avg_gpm).toFixed(2) + "," + Math.round(r.gallons));
+        });
+        const blob = new Blob([lines.join("\n")], { type: "text/csv;charset=utf-8;" });
+        const url = URL.createObjectURL(blob);
+        const link = document.createElement("a");
+        link.href = url;
+        link.download = "CVEWS_Volumetric_Yield_" + resolution + ".csv";
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        URL.revokeObjectURL(url);
     }
 
     // Google Apps Script handles all Gauges, Relays, Totals, Extremes, IP, and Firmware Version
