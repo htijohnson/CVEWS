@@ -234,15 +234,38 @@ function doPost(e) {
         var tkLg    = Math.round(Number(rData[2]) || 0);
         var flow    = (Number(rData[3]) || 0).toFixed(1);
         var cl2     = (Number(rData[4]) || 0).toFixed(2);
-        
-        // Digital states: 1 = Running/Active, 0 = Idle/Clear
-        var w1  = rData[5]  == 1 ? "RUN" : "IDLE";
-        var w3  = rData[6]  == 1 ? "RUN" : "IDLE";
-        var w4  = rData[7]  == 1 ? "RUN" : "IDLE";
-        var w5  = rData[8]  == 1 ? "RUN" : "IDLE";
-        var p1  = rData[9]  == 1 ? "RUN" : "IDLE";
-        var p2  = rData[10] == 1 ? "RUN" : "IDLE";
-        var alm = (rData[11] == 1 || rData[11] === "TRIPPED") ? "TRIPPED" : "CLEAR";
+        var alm     = (rData[11] == 1 || rData[11] === "TRIPPED") ? "TRIPPED" : "CLEAR";
+
+        // Calculate prior 24h runtime (in minutes, at 0.5 min per 30s row)
+        var now = new Date();
+        var cutoffTime24h = new Date(now.getTime() - (24 * 60 * 60 * 1000));
+        var maxRowsToRead = Math.min(lastR - 1, 3000); // ~2880 rows per 24h
+        var startRow = lastR - maxRowsToRead + 1;
+        var histData = sheet.getRange(startRow, 1, maxRowsToRead, 11).getValues();
+
+        var w1Mins = 0, w3Mins = 0, w4Mins = 0, w5Mins = 0;
+        var p1Mins = 0, p2Mins = 0;
+
+        for (var i = histData.length - 1; i >= 0; i--) {
+          var rowDate = new Date(histData[i][0]);
+          if (rowDate >= cutoffTime24h) {
+            if (histData[i][5] == 1)  w1Mins += 0.5;
+            if (histData[i][6] == 1)  w3Mins += 0.5;
+            if (histData[i][7] == 1)  w4Mins += 0.5;
+            if (histData[i][8] == 1)  w5Mins += 0.5;
+            if (histData[i][9] == 1)  p1Mins += 0.5;
+            if (histData[i][10] == 1) p2Mins += 0.5;
+          } else {
+            break;
+          }
+        }
+
+        var w1Hrs = (w1Mins / 60).toFixed(1);
+        var w3Hrs = (w3Mins / 60).toFixed(1);
+        var w4Hrs = (w4Mins / 60).toFixed(1);
+        var w5Hrs = (w5Mins / 60).toFixed(1);
+        var smallBoosterHrs = (p1Mins / 60).toFixed(1);
+        var bigBoosterHrs   = (p2Mins / 60).toFixed(1);
 
         snapshotLines = [
           "Latest Log: " + rowTime,
@@ -250,8 +273,8 @@ function doPost(e) {
           "• Lg Tank: " + tkLg + " gal",
           "• Cl2: " + cl2 + " mg/L",
           "• Flow: " + flow + " GPM",
-          "• Wells: W1:" + w1 + " | W3:" + w3 + " | W4:" + w4 + " | W5:" + w5,
-          "• Boosters: P1:" + p1 + " | P2:" + p2,
+          "• Wells (24h): W1:" + w1Hrs + "h | W3:" + w3Hrs + "h | W4:" + w4Hrs + "h | W5:" + w5Hrs + "h",
+          "• Boosters (24h): Small Booster:" + smallBoosterHrs + "h | Big Booster:" + bigBoosterHrs + "h",
           "• Alarm: " + alm
         ];
       }
@@ -699,8 +722,8 @@ function dispatchDailyReportEmail() {
              "• Well 4: " + (minutesW4 / 60).toFixed(1) + " Hours (" + minutesW4 + " mins)\n" +
              "• Well 5: " + (minutesW5 / 60).toFixed(1) + " Hours (" + minutesW5 + " mins)\n\n" +
              "⚙️ BOOSTER PUMP RUNTIMES:\n" +
-             "• 7.5hp Booster (P1): " + (minutesP1 / 60).toFixed(1) + " Hours (" + minutesP1 + " mins)\n" +
-             "• 5.0hp Booster (P2): " + (minutesP2 / 60).toFixed(1) + " Hours (" + minutesP2 + " mins)\n\n" +
+             "• Small Booster: " + (minutesP1 / 60).toFixed(1) + " Hours (" + minutesP1 + " mins)\n" +
+             "• Big Booster: " + (minutesP2 / 60).toFixed(1) + " Hours (" + minutesP2 + " mins)\n\n" +
              "📝 System Metrics:\n" +
              "• Total Data Points Analyzed: " + rowsAnalyzed + "\n" +
              "• Live Control Room Dashboard: https://htijohnson.github.io/CVEWS/\n\n" +
