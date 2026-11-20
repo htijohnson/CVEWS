@@ -33,6 +33,13 @@
         
         .unmonitored-banner { font-size: 11px; text-align: center; color: #e2e8f0; background: #4a5568; border-radius: 4px; padding: 4px 8px; font-weight: 600; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 8px; }
 
+        /* Reservoir Hi/Low Float Alarm Pills */
+        .tank-alarm-row { display: flex; justify-content: center; gap: 8px; margin-bottom: 8px; }
+        .tank-alarm-pill { display: inline-flex; align-items: center; gap: 5px; padding: 3px 9px; border-radius: 4px; font-size: 11px; font-weight: bold; text-transform: uppercase; letter-spacing: 0.5px; background: #1a202c; border: 1px solid #4a5568; color: #718096; transition: all 0.3s; }
+        .tank-alarm-pill .pill-dot { width: 8px; height: 8px; border-radius: 50%; background: #4a5568; }
+        .tank-alarm-pill.tripped { background: #742a2a; border-color: #e53e3e; color: #fff5f5; box-shadow: 0 0 8px rgba(229, 62, 62, 0.45); animation: flash-red-fast 1s infinite; }
+        .tank-alarm-pill.tripped .pill-dot { background: #fc8181; box-shadow: 0 0 6px #fc8181; }
+
         .gauge-extremes { width: 100%; display: flex; justify-content: space-between; font-size: 11px; color: #94a3b8; border-top: 1px dashed #334155; padding-top: 8px; margin-top: 5px; }
         .gauge-extremes span { font-family: monospace; color: #cbd5e0; font-weight: bold; }
 
@@ -137,6 +144,7 @@
                 grid-template-columns: 1fr auto;
                 grid-template-areas:
                     "label val"
+                    "alarms val"
                     "meta  val";
                 align-items: center;
                 column-gap: 10px;
@@ -162,6 +170,21 @@
                 overflow: hidden;
                 text-overflow: ellipsis;
             }
+            .tank-alarm-row {
+                grid-area: alarms;
+                justify-content: flex-start;
+                margin-top: 3px;
+                margin-bottom: 2px;
+                gap: 6px;
+            }
+            .tank-alarm-pill {
+                padding: 1px 6px;
+                font-size: 9px;
+            }
+            .tank-alarm-pill .pill-dot {
+                width: 6px;
+                height: 6px;
+            }
             .unmonitored-banner {
                 grid-area: meta;
                 display: inline-block;
@@ -174,7 +197,7 @@
                 color: #cbd5e0;
                 letter-spacing: 0.3px;
             }
-            /* Keep 24H Low/High visible cleanly on the meta line when present */
+            /* Keep 24H Low/High visible cleanly on the meta line */
             .gauge-extremes {
                 grid-area: meta;
                 border-top: none;
@@ -184,15 +207,14 @@
                 gap: 10px;
                 font-size: 10px;
             }
-            /* Hide placeholder empty rows so unmonitored/flow rows stay single-line */
-            .gauge-extremes[style*="visibility: hidden"] { display: none; }
-            /* If both unmonitored banner & extremes exist, stack neatly */
             #cardSmall .unmonitored-banner,
-            #cardLarge .unmonitored-banner {
-                display: none; /* Keeps Low/High readable while Flow/CL2 show the unmonitored tag */
+            #cardLarge .unmonitored-banner,
+            #cardCl2 .unmonitored-banner {
+                display: none;
             }
             #cardSmall .sensor-label::after,
-            #cardLarge .sensor-label::after {
+            #cardLarge .sensor-label::after,
+            #cardCl2 .sensor-label::after {
                 content: " [UNMONITORED]";
                 font-size: 9px;
                 color: #94a3b8;
@@ -331,8 +353,12 @@
     <div class="section-title">Process Instrumentation (Analog Gauges)</div>
     <div class="sensor-grid">
         <div id="cardSmall" class="sensor-card gauge-card">
-            <div class="sensor-label">Small Tank Level</div>
+            <div class="sensor-label">4,000 Gallon Reservoir</div>
             <div class="unmonitored-banner">⚠️ Not yet monitored, ignore</div>
+            <div class="tank-alarm-row">
+                <span id="pillLtHi" class="tank-alarm-pill"><span class="pill-dot"></span>High: Normal</span>
+                <span id="pillLtLo" class="tank-alarm-pill"><span class="pill-dot"></span>Low: Normal</span>
+            </div>
             <div class="gauge-wrapper">
                 <div class="gauge-body">
                     <div id="fillSmall" class="gauge-fill" style="background-color: #3182ce;"></div>
@@ -347,8 +373,12 @@
         </div>
 
         <div id="cardLarge" class="sensor-card gauge-card">
-            <div class="sensor-label">Large Tank Level</div>
+            <div class="sensor-label">70,000 Gallon Reservoir</div>
             <div class="unmonitored-banner">⚠️ Not yet monitored, ignore</div>
+            <div class="tank-alarm-row">
+                <span id="pillUtHi" class="tank-alarm-pill"><span class="pill-dot"></span>High: Normal</span>
+                <span id="pillUtLo" class="tank-alarm-pill"><span class="pill-dot"></span>Low: Normal</span>
+            </div>
             <div class="gauge-wrapper">
                 <div class="gauge-body">
                     <div id="fillLarge" class="gauge-fill" style="background-color: #31ac87;"></div>
@@ -371,7 +401,10 @@
                 </div>
             </div>
             <div id="valFlow" class="sensor-value gauge-value">-- <span style="font-size: 16px; color:#a0aec0;">GPM</span></div>
-            <div class="gauge-extremes" style="visibility: hidden;">Placeholder balance structure</div>
+            <div class="gauge-extremes">
+                <div>24H Low: <span id="flowMin">--</span></div>
+                <div>24H High: <span id="flowMax">--</span></div>
+            </div>
         </div>
 
         <div id="cardCl2" class="sensor-card gauge-card">
@@ -384,7 +417,10 @@
                 </div>
             </div>
             <div id="valCl2" class="sensor-value gauge-value">-- <span style="font-size: 16px; color:#a0aec0;">mg/L</span></div>
-            <div class="gauge-extremes" style="visibility: hidden;">Placeholder balance structure</div>
+            <div class="gauge-extremes">
+                <div>24H Low: <span id="cl2Min">--</span></div>
+                <div>24H High: <span id="cl2Max">--</span></div>
+            </div>
         </div>
     </div>
 
@@ -649,6 +685,19 @@
         }
     }
 
+    function toggleTankAlarmPill(id, isTripped, labelPrefix) {
+        const pill = document.getElementById(id);
+        if (!pill) return;
+        const active = (isTripped === 1 || isTripped === "1" || isTripped === true);
+        if (active) {
+            pill.className = "tank-alarm-pill tripped";
+            pill.innerHTML = `<span class="pill-dot"></span>${labelPrefix}: ALARM`;
+        } else {
+            pill.className = "tank-alarm-pill";
+            pill.innerHTML = `<span class="pill-dot"></span>${labelPrefix}: Normal`;
+        }
+    }
+
     // Modal Control & Alarm Acknowledgment (Publishes via MQTT)
     const alarmBanner = document.getElementById("alarmBanner");
     alarmBanner.addEventListener("click", () => {
@@ -839,7 +888,12 @@
                 ipLink.innerText = "http://" + data.ip + "/";
             }
 
-            // Small Tank Gauge
+            // 4,000 Gallon Reservoir (Lower Tank) Gauge & Hi/Low Switch Alarms
+            const ltHiTripped = (data.lt_hi === 1 || data.lt_hi === "1" || data.lt_hi === true);
+            const ltLoTripped = (data.lt_lo === 1 || data.lt_lo === "1" || data.lt_lo === true);
+            toggleTankAlarmPill("pillLtHi", ltHiTripped, "High");
+            toggleTankAlarmPill("pillLtLo", ltLoTripped, "Low");
+
             if (data.tk_sm !== undefined) {
                 const tkSm = Number(data.tk_sm) || 0;
                 const maxSmall = 4100;
@@ -850,19 +904,21 @@
                 
                 const cardSmall = document.getElementById("cardSmall");
                 const fillSmall = document.getElementById("fillSmall");
-                if (pctSmall < 33.33) {
+                if (ltHiTripped || ltLoTripped) {
                     cardSmall.className = "sensor-card gauge-card warning-critical-1_3";
                     fillSmall.style.backgroundColor = "#e53e3e"; 
-                } else if (pctSmall < 66.66) {
-                    cardSmall.className = "sensor-card gauge-card warning-low-2_3";
-                    fillSmall.style.backgroundColor = "#d69e2e"; 
                 } else {
                     cardSmall.className = "sensor-card gauge-card";
                     fillSmall.style.backgroundColor = "#3182ce"; 
                 }
             }
 
-            // Large Tank Gauge
+            // 70,000 Gallon Reservoir (Upper Tank) Gauge & Hi/Low Switch Alarms
+            const utHiTripped = (data.ut_hi === 1 || data.ut_hi === "1" || data.ut_hi === true);
+            const utLoTripped = (data.ut_lo === 1 || data.ut_lo === "1" || data.ut_lo === true);
+            toggleTankAlarmPill("pillUtHi", utHiTripped, "High");
+            toggleTankAlarmPill("pillUtLo", utLoTripped, "Low");
+
             if (data.tk_lg !== undefined) {
                 const tkLg = Number(data.tk_lg) || 0;
                 const maxLarge = 71000;
@@ -873,12 +929,9 @@
                 
                 const cardLarge = document.getElementById("cardLarge");
                 const fillLarge = document.getElementById("fillLarge");
-                if (pctLarge < 33.33) {
+                if (utHiTripped || utLoTripped) {
                     cardLarge.className = "sensor-card gauge-card warning-critical-1_3";
                     fillLarge.style.backgroundColor = "#e53e3e"; 
-                } else if (pctLarge < 66.66) {
-                    cardLarge.className = "sensor-card gauge-card warning-low-2_3";
-                    fillLarge.style.backgroundColor = "#d69e2e"; 
                 } else {
                     cardLarge.className = "sensor-card gauge-card";
                     fillLarge.style.backgroundColor = "#31ac87"; 
@@ -936,6 +989,15 @@
                 document.getElementById("smMax").innerText = Math.round(data.sm_max).toLocaleString();
                 document.getElementById("lgMin").innerText = Math.round(data.lg_min).toLocaleString();
                 document.getElementById("lgMax").innerText = Math.round(data.lg_max).toLocaleString();
+
+                if (data.flow_min !== undefined) {
+                    document.getElementById("flowMin").innerText = Number(data.flow_min).toFixed(1);
+                    document.getElementById("flowMax").innerText = Number(data.flow_max).toFixed(1);
+                }
+                if (data.cl2_min !== undefined) {
+                    document.getElementById("cl2Min").innerText = Number(data.cl2_min).toFixed(2);
+                    document.getElementById("cl2Max").innerText = Number(data.cl2_max).toFixed(2);
+                }
 
                 // Volumetric Yield LCDs
                 if (data.pumped_1h !== undefined) {
