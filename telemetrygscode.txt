@@ -7,6 +7,7 @@ var TWILIO_ACCOUNT_SID = scriptProps.getProperty("TWILIO_ACCOUNT_SID");
 var TWILIO_AUTH_TOKEN  = scriptProps.getProperty("TWILIO_AUTH_TOKEN");
 var TWILIO_FROM_NUMBER = scriptProps.getProperty("TWILIO_FROM_NUMBER");
 var ALARM_ACK_PIN      = scriptProps.getProperty("ALARM_ACK_PIN") || "3141";
+var SECRET_DASH_PASS   = scriptProps.getProperty("SECRET_DASH_PASS") || "hti123";
 
 var M3_TO_GALLONS = 264.172;
 
@@ -227,7 +228,7 @@ function doPost(e) {
       
       if (sheet && sheet.getLastRow() >= 2) {
         var lastR = sheet.getLastRow();
-        var rData = sheet.getRange(lastR, 1, 1, 12).getValues()[0];
+        var rData = sheet.getRange(lastR, 1, 1, 19).getValues()[0];
         
         var rowTime = Utilities.formatDate(new Date(rData[0]), Session.getScriptTimeZone(), "MM/dd HH:mm:ss");
         var tkSm    = Math.round(Number(rData[1]) || 0);
@@ -236,6 +237,11 @@ function doPost(e) {
         var cl2     = (Number(rData[4]) || 0).toFixed(2);
         var alm     = (rData[11] == 1 || rData[11] === "TRIPPED") ? "TRIPPED" : "CLEAR";
 
+        var utHi    = (rData[15] == 1) ? "ALARM" : "OK";
+        var utLo    = (rData[16] == 1) ? "ALARM" : "OK";
+        var ltHi    = (rData[17] == 1) ? "ALARM" : "OK";
+        var ltLo    = (rData[18] == 1) ? "ALARM" : "OK";
+
         // Calculate prior 24h runtime (in minutes, at 0.5 min per 30s row)
         var now = new Date();
         var cutoffTime24h = new Date(now.getTime() - (24 * 60 * 60 * 1000));
@@ -243,16 +249,12 @@ function doPost(e) {
         var startRow = lastR - maxRowsToRead + 1;
         var histData = sheet.getRange(startRow, 1, maxRowsToRead, 11).getValues();
 
-        var w1Mins = 0, w3Mins = 0, w4Mins = 0, w5Mins = 0;
-        var p1Mins = 0, p2Mins = 0;
+        var w1Mins = 0, p1Mins = 0, p2Mins = 0;
 
         for (var i = histData.length - 1; i >= 0; i--) {
           var rowDate = new Date(histData[i][0]);
           if (rowDate >= cutoffTime24h) {
             if (histData[i][5] == 1)  w1Mins += 0.5;
-            if (histData[i][6] == 1)  w3Mins += 0.5;
-            if (histData[i][7] == 1)  w4Mins += 0.5;
-            if (histData[i][8] == 1)  w5Mins += 0.5;
             if (histData[i][9] == 1)  p1Mins += 0.5;
             if (histData[i][10] == 1) p2Mins += 0.5;
           } else {
@@ -261,25 +263,22 @@ function doPost(e) {
         }
 
         var w1Hrs = (w1Mins / 60).toFixed(1);
-        var w3Hrs = (w3Mins / 60).toFixed(1);
-        var w4Hrs = (w4Mins / 60).toFixed(1);
-        var w5Hrs = (w5Mins / 60).toFixed(1);
         var smallBoosterHrs = (p1Mins / 60).toFixed(1);
         var bigBoosterHrs   = (p2Mins / 60).toFixed(1);
 
         snapshotLines = [
           "Latest Log: " + rowTime,
-          "• Sm Tank: " + tkSm + " gal",
-          "• Lg Tank: " + tkLg + " gal",
+          "• 4,000 Gal Reservoir: " + tkSm + " gal (Hi: " + ltHi + " | Lo: " + ltLo + ")",
+          "• 70,000 Gal Reservoir: " + tkLg + " gal (Hi: " + utHi + " | Lo: " + utLo + ")",
           "• Cl2: " + cl2 + " mg/L",
           "• Flow: " + flow + " GPM",
-          "• Wells (24h): W1:" + w1Hrs + "h | W3:" + w3Hrs + "h | W4:" + w4Hrs + "h | W5:" + w5Hrs + "h",
-          "• Boosters (24h): Small Booster:" + smallBoosterHrs + "h | Big Booster:" + bigBoosterHrs + "h",
-          "• Alarm: " + alm
+          "• Well 1 (24h): " + w1Hrs + "h",
+          "• Boosters (24h): 7.5hp:" + smallBoosterHrs + "h | 5hp:" + bigBoosterHrs + "h",
+          "• System Alarm: " + alm
         ];
       }
 
-      var testText = "CVEWS System Messaging Daily Test Text. (Some values aren't being monitored yet)";
+      var testText = "CVEWS System Messaging Daily Test Text. (Some analog values aren't being monitored yet)";
       if (snapshotLines.length > 0) {
         testText += "\n\n" + snapshotLines.join("\n");
       }
@@ -300,14 +299,14 @@ function doPost(e) {
                              .setMimeType(ContentService.MimeType.JSON);
       }
 
-      var ackMessage = techName + " Acknowledge the Alarm and is investingating";
+      var ackMessage = techName + " Acknowledged the Alarm and is investigating";
       dispatchSmsToRecipients(ackMessage);
 
       return ContentService.createTextOutput(JSON.stringify({ "status": "success", "message": ackMessage }))
                            .setMimeType(ContentService.MimeType.JSON);
     }
 
-    // Standard Telemetry Logging to Sheet1 (Columns A-L: data, Columns M-O: device, ip, version)
+    // Standard Telemetry Logging to Sheet1
     var sheet = ss.getSheetByName("Sheet1");
     if (!sheet) {
       sheet = ss.insertSheet("Sheet1");
@@ -328,7 +327,11 @@ function doPost(e) {
       payloadData.alm ? 1 : 0,
       payloadData.device || "Lower Pumphouse",
       payloadData.ip || "",
-      payloadData.version || ""
+      payloadData.version || "",
+      payloadData.ut_hi ? 1 : 0,
+      payloadData.ut_lo ? 1 : 0,
+      payloadData.lt_hi ? 1 : 0,
+      payloadData.lt_lo ? 1 : 0
     ];
     
     sheet.appendRow(logRow);
@@ -410,8 +413,8 @@ function scanForActiveAlarms(payloadData) {
     var emailSubject = "⚠️ CVEWS ALARM!";
     var emailBody = "🚨 SYSTEM TRIPPED!\n" +
                     "Time: " + formattedTime + "\n" +
-                    "• Sm Tank: " + tk_sm + " Gal\n" +
-                    "• Lg Tank: " + tk_lg + " Gal\n" +
+                    "• 4,000 Gal Reservoir: " + tk_sm + " Gal\n" +
+                    "• 70,000 Gal Reservoir: " + tk_lg + " Gal\n" +
                     "• Flow: " + flow + " GPM\n" +
                     "Dash: https://htijohnson.github.io/CVEWS/"; 
                     
@@ -426,8 +429,8 @@ function scanForActiveAlarms(payloadData) {
     var clearSubject = "✅ CVEWS RESOLVED";
     var clearBody = "💚 SYSTEM CLEAR / BACK TO NORMAL\n" +
                     "Cleared At: " + formattedTime + "\n\n" +
-                    "• Sm Tank: " + tk_sm + " Gal\n" +
-                    "• Lg Tank: " + tk_lg + " Gal\n" +
+                    "• 4,000 Gal Reservoir: " + tk_sm + " Gal\n" +
+                    "• 70,000 Gal Reservoir: " + tk_lg + " Gal\n" +
                     "• Flow: " + flow + " GPM\n" +
                     "System monitoring continuing normally.";
                     
@@ -452,7 +455,6 @@ function getGallonsPumpedOverHours(hours) {
   var now = new Date();
   var cutoffTime = new Date(now.getTime() - (hours * 60 * 60 * 1000));
   
-  // ESP32 posts every 30 seconds (~120 rows/hour)
   var maxRowsToRead = Math.min(lastRow - 1, hours * 130); 
   var startRow = lastRow - maxRowsToRead + 1;
   
@@ -465,7 +467,6 @@ function getGallonsPumpedOverHours(hours) {
     var rowTime = new Date(timestamps[i][0]);
     if (rowTime >= cutoffTime) {
       var gpm = parseFloat(flowRates[i][0]) || 0;
-      // 30 seconds = 0.5 minutes: gallons = GPM * 0.5
       totalGallons += (gpm * 0.5); 
     } else {
       break; 
@@ -474,10 +475,87 @@ function getGallonsPumpedOverHours(hours) {
   return Math.round(totalGallons);
 }
 
+// Custom Volumetric Yield Report Generator (Minute / Hourly / Daily)
+function generateVolumetricYieldReport(sheet, startIso, endIso, resolution) {
+  var lastRow = sheet.getLastRow();
+  if (lastRow < 2) {
+    return { total_gallons: 0, rows: [] };
+  }
+
+  var startDate = new Date(startIso);
+  var endDate = new Date(endIso);
+  if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+    return { error: "Invalid start or end date." };
+  }
+
+  var tz = Session.getScriptTimeZone();
+  var formatPattern = "MM/dd/yyyy HH:00";
+  if (resolution === "minute") {
+    formatPattern = "MM/dd/yyyy HH:mm";
+  } else if (resolution === "daily") {
+    formatPattern = "MM/dd/yyyy";
+  }
+
+  var numRows = lastRow - 1;
+  var timestamps = sheet.getRange(2, 1, numRows, 1).getValues();
+  var flowRates  = sheet.getRange(2, 4, numRows, 1).getValues();
+
+  var buckets = {};
+  var bucketOrder = [];
+  var grandTotalGallons = 0;
+
+  for (var i = 0; i < numRows; i++) {
+    var rowTime = new Date(timestamps[i][0]);
+    if (rowTime >= startDate && rowTime <= endDate) {
+      var gpm = parseFloat(flowRates[i][0]) || 0;
+      var gallons = gpm * 0.5;
+      grandTotalGallons += gallons;
+
+      var bucketKey = Utilities.formatDate(rowTime, tz, formatPattern);
+      if (!buckets[bucketKey]) {
+        buckets[bucketKey] = {
+          period: bucketKey,
+          gallons: 0,
+          gpmSum: 0,
+          count: 0
+        };
+        bucketOrder.push(bucketKey);
+      }
+      buckets[bucketKey].gallons += gallons;
+      buckets[bucketKey].gpmSum += gpm;
+      buckets[bucketKey].count += 1;
+    }
+  }
+
+  var rows = bucketOrder.map(function(key) {
+    var b = buckets[key];
+    return {
+      period: b.period,
+      avg_gpm: b.count > 0 ? (b.gpmSum / b.count) : 0,
+      gallons: Math.round(b.gallons)
+    };
+  });
+
+  return {
+    resolution: resolution,
+    total_gallons: Math.round(grandTotalGallons),
+    rows: rows
+  };
+}
+
 // ==========================================
 // 4. WEBPAGE API ENTRANCE (GET METHOD)
 // ==========================================
 function doGet(e) {
+  // Handle Secret Control Dashboard Password Check (against SECRET_DASH_PASS Script Property)
+  if (e && e.parameter && e.parameter.type === "verify_secret") {
+    var submittedPass = String(e.parameter.pass || "").trim();
+    var validPass = String(SECRET_DASH_PASS || "").trim();
+    var isValid = (submittedPass.length > 0 && submittedPass === validPass);
+    return ContentService.createTextOutput(JSON.stringify({ "valid": isValid }))
+                         .setMimeType(ContentService.MimeType.JSON);
+  }
+
   var ss = SpreadsheetApp.getActiveSpreadsheet();
   
   // Handle opt-in submissions via GET query params
@@ -503,6 +581,18 @@ function doGet(e) {
 
   var sheet = ss.getSheetByName("Sheet1");
   var lastRow = sheet.getLastRow();
+
+  // Handle Custom Volumetric Yield Report Query
+  if (e && e.parameter && e.parameter.type === "yield_report") {
+    var reportResult = generateVolumetricYieldReport(
+      sheet,
+      e.parameter.start,
+      e.parameter.end,
+      e.parameter.resolution || "hourly"
+    );
+    return ContentService.createTextOutput(JSON.stringify(reportResult))
+                         .setMimeType(ContentService.MimeType.JSON);
+  }
   
   var isRawRequested = (e && e.parameter && (e.parameter.type === "flow" || e.parameter.type === "raw" || e.parameter.format === "raw"));
 
@@ -519,24 +609,29 @@ function doGet(e) {
   
   var maxRowsToRead = Math.min(lastRow - 1, 50000); 
   var startRow = lastRow - maxRowsToRead + 1;
-  var dataRange = sheet.getRange(startRow, 1, maxRowsToRead, 15).getValues();
+  var dataRange = sheet.getRange(startRow, 1, maxRowsToRead, 19).getValues();
 
   var w1Mins = 0, w3Mins = 0, w4Mins = 0, w5Mins = 0, p1Mins = 0, p2Mins = 0;
   var smallTankValues = [];
   var largeTankValues = [];
+  var flowValues      = [];
+  var cl2Values       = [];
   var rawHistoricalLogs = [];
 
   var alarmTrippedCount = 0;
   var inAlarmState = false;
 
+  var utHiTrips = 0, inUtHi = false;
+  var utLoTrips = 0, inUtLo = false;
+  var ltHiTrips = 0, inLtHi = false;
+  var ltLoTrips = 0, inLtLo = false;
+
   for (var i = 0; i < dataRange.length; i++) {
     var rawDate = dataRange[i][0];
     var rowTime = new Date(rawDate);
     
-    // Collect flow samples from the last 24 hours for calculateIntegratedVolume()
     if (rowTime >= cutoffTime24h) {
       var gpmFlow = parseFloat(dataRange[i][3]) || 0;
-      // Convert GPM to m3/h so client calculation ((rate * 264.172) / 60) results in exact gallons
       var m3hFlow = (gpmFlow * 60.0) / M3_TO_GALLONS;
 
       rawHistoricalLogs.push({
@@ -548,19 +643,30 @@ function doGet(e) {
     if (rowTime >= cutoffTime30d) {
       var almStatus = dataRange[i][11];
       var isRowTripped = (almStatus === 1 || almStatus === "1" || almStatus === true || almStatus === "TRIPPED");
-      
       if (isRowTripped) {
-        if (!inAlarmState) {
-          alarmTrippedCount++;
-          inAlarmState = true;
-        }
+        if (!inAlarmState) { alarmTrippedCount++; inAlarmState = true; }
       } else {
         inAlarmState = false;
       }
+
+      if (dataRange[i][15] === 1 || dataRange[i][15] === "1") {
+        if (!inUtHi) { utHiTrips++; inUtHi = true; }
+      } else { inUtHi = false; }
+
+      if (dataRange[i][16] === 1 || dataRange[i][16] === "1") {
+        if (!inUtLo) { utLoTrips++; inUtLo = true; }
+      } else { inUtLo = false; }
+
+      if (dataRange[i][17] === 1 || dataRange[i][17] === "1") {
+        if (!inLtHi) { ltHiTrips++; inLtHi = true; }
+      } else { inLtHi = false; }
+
+      if (dataRange[i][18] === 1 || dataRange[i][18] === "1") {
+        if (!inLtLo) { ltLoTrips++; inLtLo = true; }
+      } else { inLtLo = false; }
     }
 
     if (rowTime >= cutoffTime24h) {
-      // 30-second intervals = 0.5 mins per tick
       if (dataRange[i][5] === 1)  w1Mins += 0.5;
       if (dataRange[i][6] === 1)  w3Mins += 0.5;
       if (dataRange[i][7] === 1)  w4Mins += 0.5;
@@ -568,27 +674,37 @@ function doGet(e) {
       if (dataRange[i][9] === 1)  p1Mins += 0.5;
       if (dataRange[i][10] === 1) p2Mins += 0.5;
 
-      var smVal = Number(dataRange[i][1]);
-      var lgVal = Number(dataRange[i][2]);
-      if (!isNaN(smVal) && smVal > 0) smallTankValues.push(smVal);
-      if (!isNaN(lgVal) && lgVal > 0) largeTankValues.push(lgVal);
+      var smVal   = Number(dataRange[i][1]);
+      var lgVal   = Number(dataRange[i][2]);
+      var flVal   = Number(dataRange[i][3]);
+      var cl2Val  = Number(dataRange[i][4]);
+
+      if (!isNaN(smVal) && smVal > 0)   smallTankValues.push(smVal);
+      if (!isNaN(lgVal) && lgVal > 0)   largeTankValues.push(lgVal);
+      if (!isNaN(flVal) && flVal >= 0)  flowValues.push(flVal);
+      if (!isNaN(cl2Val) && cl2Val >= 0) cl2Values.push(cl2Val);
     }
   }
 
-  // If caller requests ?type=flow
   if (isRawRequested) {
     return ContentService.createTextOutput(JSON.stringify(rawHistoricalLogs))
                          .setMimeType(ContentService.MimeType.JSON);
   }
 
-  var latestRow = dataRange[dataRange.length - 1];
+  var latestRow    = dataRange[dataRange.length - 1];
   var currentSmall = latestRow[1];
   var currentLarge = latestRow[2];
+  var currentFlow  = latestRow[3];
+  var currentCl2   = latestRow[4];
   
-  var smMin = smallTankValues.length ? Math.min.apply(null, smallTankValues) : currentSmall;
-  var smMax = smallTankValues.length ? Math.max.apply(null, smallTankValues) : currentSmall;
-  var lgMin = largeTankValues.length ? Math.min.apply(null, largeTankValues) : currentLarge;
-  var lgMax = largeTankValues.length ? Math.max.apply(null, largeTankValues) : currentLarge;
+  var smMin   = smallTankValues.length ? Math.min.apply(null, smallTankValues) : currentSmall;
+  var smMax   = smallTankValues.length ? Math.max.apply(null, smallTankValues) : currentSmall;
+  var lgMin   = largeTankValues.length ? Math.min.apply(null, largeTankValues) : currentLarge;
+  var lgMax   = largeTankValues.length ? Math.max.apply(null, largeTankValues) : currentLarge;
+  var flowMin = flowValues.length      ? Math.min.apply(null, flowValues)      : currentFlow;
+  var flowMax = flowValues.length      ? Math.max.apply(null, flowValues)      : currentFlow;
+  var cl2Min  = cl2Values.length       ? Math.min.apply(null, cl2Values)       : currentCl2;
+  var cl2Max  = cl2Values.length       ? Math.max.apply(null, cl2Values)       : currentCl2;
   
   var data = {
     "timestamp": Utilities.formatDate(new Date(latestRow[0]), Session.getScriptTimeZone(), "MM/dd HH:mm:ss"),
@@ -597,8 +713,8 @@ function doGet(e) {
     "version":   latestRow[14] ? String(latestRow[14]) : "",
     "tk_sm":     currentSmall,
     "tk_lg":     currentLarge,
-    "flow":      latestRow[3],
-    "cl2":       latestRow[4],
+    "flow":      currentFlow,
+    "cl2":       currentCl2,
     "w1":        latestRow[5],
     "w3":        latestRow[6],
     "w4":        latestRow[7],
@@ -606,6 +722,10 @@ function doGet(e) {
     "p1":        latestRow[9],
     "p2":        latestRow[10],
     "alm":       latestRow[11],
+    "ut_hi":     latestRow[15] ? 1 : 0,
+    "ut_lo":     latestRow[16] ? 1 : 0,
+    "lt_hi":     latestRow[17] ? 1 : 0,
+    "lt_lo":     latestRow[18] ? 1 : 0,
     "pumped_1h":  getGallonsPumpedOverHours(1),
     "pumped_6h":  getGallonsPumpedOverHours(6),
     "pumped_12h": getGallonsPumpedOverHours(12),
@@ -616,11 +736,19 @@ function doGet(e) {
     "w5_24h": (w5Mins / 60).toFixed(1),
     "p1_24h": (p1Mins / 60).toFixed(1),
     "p2_24h": (p2Mins / 60).toFixed(1),
-    "sm_min": Math.round(smMin),
-    "sm_max": Math.round(smMax),
-    "lg_min": Math.round(lgMin),
-    "lg_max": Math.round(lgMax),
-    "alarm_30d_count": alarmTrippedCount
+    "sm_min":   Math.round(smMin),
+    "sm_max":   Math.round(smMax),
+    "lg_min":   Math.round(lgMin),
+    "lg_max":   Math.round(lgMax),
+    "flow_min": Number(flowMin || 0).toFixed(1),
+    "flow_max": Number(flowMax || 0).toFixed(1),
+    "cl2_min":  Number(cl2Min || 0).toFixed(2),
+    "cl2_max":  Number(cl2Max || 0).toFixed(2),
+    "alarm_30d_count": alarmTrippedCount,
+    "ut_hi_30d": utHiTrips,
+    "ut_lo_30d": utLoTrips,
+    "lt_hi_30d": ltHiTrips,
+    "lt_lo_30d": ltLoTrips
   };
   
   return ContentService.createTextOutput(JSON.stringify(data)).setMimeType(ContentService.MimeType.JSON);
@@ -640,7 +768,7 @@ function compileDailyReportData() {
   
   var maxRowsToRead = Math.min(lastRow - 1, 3000); 
   var startRow = lastRow - maxRowsToRead + 1;
-  var dataRange = sheet.getRange(startRow, 1, maxRowsToRead, 12).getValues();
+  var dataRange = sheet.getRange(startRow, 1, maxRowsToRead, 19).getValues();
   
   var totalGallons = 0;
   var minutesW1 = 0, minutesW3 = 0, minutesW4 = 0, minutesW5 = 0;
@@ -717,13 +845,10 @@ function dispatchDailyReportEmail() {
              "💧 VOLUMETRIC YIELD:\n" +
              "• Total Water Pumped: " + Math.round(totalGallons).toLocaleString() + " Gallons\n\n" +
              "🔌 WELL RUNTIMES:\n" +
-             "• Well 1: " + (minutesW1 / 60).toFixed(1) + " Hours (" + minutesW1 + " mins)\n" +
-             "• Well 3: " + (minutesW3 / 60).toFixed(1) + " Hours (" + minutesW3 + " mins)\n" +
-             "• Well 4: " + (minutesW4 / 60).toFixed(1) + " Hours (" + minutesW4 + " mins)\n" +
-             "• Well 5: " + (minutesW5 / 60).toFixed(1) + " Hours (" + minutesW5 + " mins)\n\n" +
+             "• Well 1: " + (minutesW1 / 60).toFixed(1) + " Hours (" + minutesW1 + " mins)\n\n" +
              "⚙️ BOOSTER PUMP RUNTIMES:\n" +
-             "• Small Booster: " + (minutesP1 / 60).toFixed(1) + " Hours (" + minutesP1 + " mins)\n" +
-             "• Big Booster: " + (minutesP2 / 60).toFixed(1) + " Hours (" + minutesP2 + " mins)\n\n" +
+             "• 7.5hp Booster: " + (minutesP1 / 60).toFixed(1) + " Hours (" + minutesP1 + " mins)\n" +
+             "• 5hp Booster: " + (minutesP2 / 60).toFixed(1) + " Hours (" + minutesP2 + " mins)\n\n" +
              "📝 System Metrics:\n" +
              "• Total Data Points Analyzed: " + rowsAnalyzed + "\n" +
              "• Live Control Room Dashboard: https://htijohnson.github.io/CVEWS/\n\n" +
