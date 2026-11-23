@@ -584,7 +584,7 @@
             </div>
         </div>
 
-        <!-- Option 2 & 3: OTA Update & Restart -->
+        <!-- Option 2 & 3: OTA Update & Soft/Hard Restart -->
         <div style="display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:12px;">
             <div style="background:#1a1e24; border:1px solid #2d3748; border-radius:6px; padding:12px; display:flex; flex-direction:column; justify-content:space-between;">
                 <div>
@@ -597,9 +597,12 @@
             <div style="background:#1a1e24; border:1px solid #2d3748; border-radius:6px; padding:12px; display:flex; flex-direction:column; justify-content:space-between;">
                 <div>
                     <div style="font-size:13px; font-weight:bold; color:#e2e8f0; margin-bottom:4px;">🔄 Reboot Node</div>
-                    <p style="font-size:11px; color:#94a3b8; margin-bottom:8px;">Soft reset the ESP32 controller.</p>
+                    <p style="font-size:11px; color:#94a3b8; margin-bottom:8px;">Soft reset or full hardware radio/peripheral reset.</p>
                 </div>
-                <button onclick="sendRestartCommand()" style="width:100%; padding:8px; background:#e53e3e; color:#fff; font-weight:bold; border:none; border-radius:4px; cursor:pointer;">Restart ESP32</button>
+                <div style="display:flex; flex-direction:column; gap:6px;">
+                    <button onclick="sendRestartCommand()" style="width:100%; padding:7px; background:#dd6b20; color:#fff; font-weight:bold; border:none; border-radius:4px; cursor:pointer;">Soft Restart</button>
+                    <button onclick="sendHardRestartCommand()" style="width:100%; padding:7px; background:#e53e3e; color:#fff; font-weight:bold; border:none; border-radius:4px; cursor:pointer;">⚡ Hard Restart</button>
+                </div>
             </div>
         </div>
 
@@ -1024,8 +1027,13 @@
     }
 
     function sendRestartCommand() {
-        if (!confirm("Are you sure you want to restart the Lower Pumphouse ESP32?")) return;
-        publishNodeCommand("RESTART", "Sent command: Rebooting Lower Pumphouse ESP32...");
+        if (!confirm("Are you sure you want to soft restart the Lower Pumphouse ESP32?")) return;
+        publishNodeCommand("RESTART", "Sent command: Soft rebooting Lower Pumphouse ESP32...");
+    }
+
+    function sendHardRestartCommand() {
+        if (!confirm("HARD RESTART: This will tear down Wi-Fi/MQTT/Modbus peripherals and cold-reboot the ESP32. Continue?")) return;
+        publishNodeCommand("HARD_RESTART", "Sent command: Hard rebooting Lower Pumphouse ESP32...");
     }
 
     // Volumetric Yield Report Modal Logic
