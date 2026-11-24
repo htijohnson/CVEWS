@@ -10,6 +10,8 @@ var ALARM_ACK_PIN      = scriptProps.getProperty("ALARM_ACK_PIN") || "3141";
 var SECRET_DASH_PASS   = scriptProps.getProperty("SECRET_DASH_PASS") || "hti123";
 
 var M3_TO_GALLONS = 264.172;
+var SNOOZE_DURATION_MINUTES = 30;
+var SNOOZE_FOOTER = "\n\nRespond with SNOOZE to pause messages for 30 minutes.";
 
 // Helper to format any standard US phone string into E.164 (+1XXXXXXXXXX)
 function formatToE164(phone) {
@@ -23,6 +25,19 @@ function formatToE164(phone) {
     return "+" + digits;
   }
   return null;
+}
+
+// Helper to escape XML characters for Twilio TwiML responses
+function escapeXml(unsafe) {
+  return String(unsafe || "").replace(/[<>&'"]/g, function (c) {
+    switch (c) {
+      case '<': return '&lt;';
+      case '>': return '&gt;';
+      case '&': return '&amp;';
+      case '\'': return '&apos;';
+      case '"': return '&quot;';
+    }
+  });
 }
 
 // Validates that PIN matches the last 4 of Column 3 (Phone) AND
@@ -73,6 +88,12 @@ function sendTwilioSms(toPhone, bodyText) {
     return;
   }
 
+  // Append snooze prompt to every outbound text if not already present
+  var finalBody = String(bodyText || "");
+  if (finalBody.toLowerCase().indexOf("respond with snooze") === -1) {
+    finalBody += SNOOZE_FOOTER;
+  }
+
   var url = "https://api.twilio.com/2010-04-01/Accounts/" + TWILIO_ACCOUNT_SID + "/Messages.json";
   var options = {
     "method": "post",
@@ -82,7 +103,7 @@ function sendTwilioSms(toPhone, bodyText) {
     "payload": {
       "To": formattedTo,
       "From": TWILIO_FROM_NUMBER,
-      "Body": bodyText
+      "Body": finalBody
     },
     "muteHttpExceptions": true
   };
@@ -107,14 +128,85 @@ function dispatchSmsToRecipients(messageBody) {
   var lastRow = recipientSheet.getLastRow();
   if (lastRow < 2) return;
   
-  var data = recipientSheet.getRange(2, 1, lastRow - 1, 5).getValues();
+  // Read Columns A through F (Col C = Phone, Col F = Snoozed Until)
+  var data = recipientSheet.getRange(2, 1, lastRow - 1, 6).getValues();
+  var now = new Date();
   
   for (var i = 0; i < data.length; i++) {
     var phone = String(data[i][2]).trim();
-    if (phone) {
-      sendTwilioSms(phone, messageBody);
+    if (!phone) continue;
+
+    // Check if recipient is currently snoozed (Column F / index 5)
+    var snoozedUntilRaw = data[i][5];
+    if (snoozedUntilRaw) {
+      var snoozedUntil = new Date(snoozedUntilRaw);
+      if (!isNaN(snoozedUntil.getTime()) && now < snoozedUntil) {
+        Logger.log("Skipping SMS to " + phone + " (snoozed until " + snoozedUntil.toISOString() + ")");
+        continue;
+      }
+    }
+
+    sendTwilioSms(phone, messageBody);
+  }
+}
+
+// ==========================================
+// INCOMING TWILIO SMS WEBHOOK HANDLER
+// ==========================================
+function handleIncomingTwilioSms(ss, fromNumber, messageBody) {
+  var formattedFrom = formatToE164(fromNumber);
+  var cleanBody = String(messageBody || "").trim().toUpperCase();
+  var replyMessage = "";
+
+  var recipientSheet = ss.getSheetByName("Recipients");
+  if (!recipientSheet || recipientSheet.getLastRow() < 2 || !formattedFrom) {
+    replyMessage = "Your number was not found on the CVEWS alert list.";
+    return ContentService.createTextOutput(
+      '<?xml version="1.0" encoding="UTF-8"?><Response><Message>' + escapeXml(replyMessage) + '</Message></Response>'
+    ).setMimeType(ContentService.MimeType.XML);
+  }
+
+  var lastRow = recipientSheet.getLastRow();
+  var phoneValues = recipientSheet.getRange(2, 3, lastRow - 1, 1).getValues();
+  var matchedRows = [];
+
+  for (var i = 0; i < phoneValues.length; i++) {
+    if (formatToE164(phoneValues[i][0]) === formattedFrom) {
+      matchedRows.push(i + 2); // 1-indexed sheet row
     }
   }
+
+  if (matchedRows.length === 0) {
+    replyMessage = "Your number was not found on the CVEWS alert list.";
+  } else if (cleanBody === "SNOOZE" || cleanBody.indexOf("SNOOZE") === 0) {
+    var snoozeUntil = new Date(Date.now() + (SNOOZE_DURATION_MINUTES * 60 * 1000));
+    var tz = Session.getScriptTimeZone();
+    var formattedResumeTime = Utilities.formatDate(snoozeUntil, tz, "h:mm a");
+
+    // Ensure Column F header exists
+    if (!recipientSheet.getRange(1, 6).getValue()) {
+      recipientSheet.getRange(1, 6).setValue("Snoozed Until").setFontWeight("bold");
+    }
+
+    matchedRows.forEach(function(rowIdx) {
+      recipientSheet.getRange(rowIdx, 6).setValue(snoozeUntil);
+    });
+    SpreadsheetApp.flush();
+
+    replyMessage = "CVEWS alerts paused for " + SNOOZE_DURATION_MINUTES + " minutes (until " + formattedResumeTime + "). Reply RESUME anytime to turn them back on.";
+  } else if (cleanBody === "RESUME" || cleanBody === "UNPAUSE" || cleanBody === "UNSNOOZE") {
+    matchedRows.forEach(function(rowIdx) {
+      recipientSheet.getRange(rowIdx, 6).clearContent();
+    });
+    SpreadsheetApp.flush();
+
+    replyMessage = "CVEWS alerts have been resumed.";
+  } else {
+    replyMessage = "Unrecognized command. Reply SNOOZE to pause alerts for 30 minutes, RESUME to unpause, or STOP to unsubscribe.";
+  }
+
+  var twiml = '<?xml version="1.0" encoding="UTF-8"?><Response><Message>' + escapeXml(replyMessage) + '</Message></Response>';
+  return ContentService.createTextOutput(twiml).setMimeType(ContentService.MimeType.XML);
 }
 
 // ==========================================
@@ -127,12 +219,12 @@ function saveOptInRecord(ss, name, phone, ip, consentText) {
   }
   
   if (recipientSheet.getLastRow() === 0) {
-    recipientSheet.appendRow(["Timestamp", "Full Name", "Phone / Target", "IP Address", "Consent Disclosure"]);
-    recipientSheet.getRange("A1:E1").setFontWeight("bold");
+    recipientSheet.appendRow(["Timestamp", "Full Name", "Phone / Target", "IP Address", "Consent Disclosure", "Snoozed Until"]);
+    recipientSheet.getRange("A1:F1").setFontWeight("bold");
   }
 
   var formattedPhone = formatToE164(phone) || phone;
-  recipientSheet.appendRow([new Date(), name, formattedPhone, ip, consentText]);
+  recipientSheet.appendRow([new Date(), name, formattedPhone, ip, consentText, ""]);
   SpreadsheetApp.flush();
   Logger.log("Successfully recorded opt-in for: " + name + " (" + formattedPhone + ")");
 }
@@ -148,6 +240,13 @@ function doPost(e) {
     var ss = SpreadsheetApp.getActiveSpreadsheet();
     var rawContents = (e && e.postData && e.postData.contents) ? e.postData.contents : "";
     Logger.log("Incoming doPost rawContents: " + rawContents);
+
+    // ----------------------------------------------------
+    // CHECK 0: Incoming Twilio SMS Webhook (From & Body)
+    // ----------------------------------------------------
+    if (e && e.parameter && e.parameter.From && typeof e.parameter.Body !== "undefined") {
+      return handleIncomingTwilioSms(ss, e.parameter.From, e.parameter.Body);
+    }
 
     var parsedJson = null;
     if (rawContents) {
@@ -221,8 +320,21 @@ function doPost(e) {
                            .setMimeType(ContentService.MimeType.JSON);
     }
 
-    // Check for Daily Noon Test SMS
+    // Check for Daily Noon Test SMS (Deduplicated to 1 per calendar day across all nodes/reboots)
     if (payloadData.action === "daily_test_sms") {
+      var tz = Session.getScriptTimeZone();
+      var todayKey = Utilities.formatDate(new Date(), tz, "yyyy-MM-dd");
+      var lastSentDate = scriptProps.getProperty("LAST_NOON_TEST_DATE");
+
+      if (lastSentDate === todayKey) {
+        Logger.log("Daily noon test SMS already dispatched today (" + todayKey + "). Skipping duplicate.");
+        return ContentService.createTextOutput(JSON.stringify({"status": "skipped_already_sent_today"}))
+                             .setMimeType(ContentService.MimeType.JSON);
+      }
+
+      // Lock in today's date BEFORE sending so concurrent/rapid requests cannot duplicate
+      scriptProps.setProperty("LAST_NOON_TEST_DATE", todayKey);
+
       var sheet = ss.getSheetByName("Sheet1");
       var snapshotLines = [];
       
@@ -230,7 +342,7 @@ function doPost(e) {
         var lastR = sheet.getLastRow();
         var rData = sheet.getRange(lastR, 1, 1, 19).getValues()[0];
         
-        var rowTime = Utilities.formatDate(new Date(rData[0]), Session.getScriptTimeZone(), "MM/dd HH:mm:ss");
+        var rowTime = Utilities.formatDate(new Date(rData[0]), tz, "MM/dd HH:mm:ss");
         var tkSm    = Math.round(Number(rData[1]) || 0);
         var tkLg    = Math.round(Number(rData[2]) || 0);
         var flow    = (Number(rData[3]) || 0).toFixed(1);
@@ -857,3 +969,4 @@ function dispatchDailyReportEmail() {
   MailApp.sendEmail(notifyTargets, subject, body);
   cacheSheet.clear();
 }
+```[cite: 4]
