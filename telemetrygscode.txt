@@ -1,5 +1,5 @@
 // ==========================================
-// TWILIO CREDENTIALS CONFIGURATION
+// TWILIO CREDENTIALS & SYSTEM CONFIGURATION
 // Stored securely in Project Settings > Script Properties
 // ==========================================
 var scriptProps = PropertiesService.getScriptProperties();
@@ -12,6 +12,67 @@ var SECRET_DASH_PASS   = scriptProps.getProperty("SECRET_DASH_PASS") || "hti123"
 var M3_TO_GALLONS = 264.172;
 var SNOOZE_DURATION_MINUTES = 30;
 var SNOOZE_FOOTER = "\n\nRespond with SNOOZE to pause messages for 30 minutes.";
+var ARCHIVE_FOLDER_NAME = "CVEWS Telemetry Archives";
+
+var LOG_HEADERS = [
+  "Timestamp", "tk_sm", "tk_lg", "flow", "cl2",
+  "w1", "w3", "w4", "w5", "p1", "p2", "alm",
+  "device", "ip", "version", "ut_hi", "ut_lo", "lt_hi", "lt_lo"
+];
+
+// ==========================================
+// MONTHLY SHEET & DATA STITCHING HELPERS
+// ==========================================
+
+// Returns the sheet for a given Date (defaults to now), creating it with headers if missing
+function getMonthlySheet(ss, targetDate) {
+  var dateObj = targetDate || new Date();
+  var tz = Session.getScriptTimeZone();
+  var sheetName = Utilities.formatDate(dateObj, tz, "yyyy-MM");
+  
+  var sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    sheet = ss.insertSheet(sheetName);
+    sheet.appendRow(LOG_HEADERS);
+    sheet.getRange(1, 1, 1, LOG_HEADERS.length).setFontWeight("bold");
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+// Fetches recent rows across the current and previous month's sheets seamlessly
+function getRecentTelemetryRows(ss, maxRows) {
+  var now = new Date();
+  var currSheet = getMonthlySheet(ss, now);
+  var rows = [];
+
+  var currLast = currSheet.getLastRow();
+  if (currLast >= 2) {
+    var takeCurr = Math.min(currLast - 1, maxRows);
+    rows = currSheet.getRange(currLast - takeCurr + 1, 1, takeCurr, 19).getValues();
+  }
+
+  // Pull remainder from previous month's tab if early in a new month
+  if (rows.length < maxRows) {
+    var prevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 15);
+    var tz = Session.getScriptTimeZone();
+    var prevSheetName = Utilities.formatDate(prevMonthDate, tz, "yyyy-MM");
+    var prevSheet = ss.getSheetByName(prevSheetName);
+
+    if (prevSheet && prevSheet.getLastRow() >= 2) {
+      var needed = maxRows - rows.length;
+      var prevLast = prevSheet.getLastRow();
+      var takePrev = Math.min(prevLast - 1, needed);
+      var prevRows = prevSheet.getRange(prevLast - takePrev + 1, 1, takePrev, 19).getValues();
+      rows = prevRows.concat(rows);
+    }
+  }
+  return rows;
+}
+
+// ==========================================
+// GENERAL & TWILIO HELPER FUNCTIONS
+// ==========================================
 
 // Helper to format any standard US phone string into E.164 (+1XXXXXXXXXX)
 function formatToE164(phone) {
@@ -335,12 +396,11 @@ function doPost(e) {
       // Lock in today's date BEFORE sending so concurrent/rapid requests cannot duplicate
       scriptProps.setProperty("LAST_NOON_TEST_DATE", todayKey);
 
-      var sheet = ss.getSheetByName("Sheet1");
+      var histData = getRecentTelemetryRows(ss, 3000); // ~2880 rows per 24h across month boundary
       var snapshotLines = [];
       
-      if (sheet && sheet.getLastRow() >= 2) {
-        var lastR = sheet.getLastRow();
-        var rData = sheet.getRange(lastR, 1, 1, 19).getValues()[0];
+      if (histData.length > 0) {
+        var rData = histData[histData.length - 1];
         
         var rowTime = Utilities.formatDate(new Date(rData[0]), tz, "MM/dd HH:mm:ss");
         var tkSm    = Math.round(Number(rData[1]) || 0);
@@ -357,10 +417,6 @@ function doPost(e) {
         // Calculate prior 24h runtime (in minutes, at 0.5 min per 30s row)
         var now = new Date();
         var cutoffTime24h = new Date(now.getTime() - (24 * 60 * 60 * 1000));
-        var maxRowsToRead = Math.min(lastR - 1, 3000); // ~2880 rows per 24h
-        var startRow = lastR - maxRowsToRead + 1;
-        var histData = sheet.getRange(startRow, 1, maxRowsToRead, 11).getValues();
-
         var w1Mins = 0, p1Mins = 0, p2Mins = 0;
 
         for (var i = histData.length - 1; i >= 0; i--) {
@@ -418,14 +474,12 @@ function doPost(e) {
                            .setMimeType(ContentService.MimeType.JSON);
     }
 
-    // Standard Telemetry Logging to Sheet1
-    var sheet = ss.getSheetByName("Sheet1");
-    if (!sheet) {
-      sheet = ss.insertSheet("Sheet1");
-    }
+    // Standard Telemetry Logging to Current Monthly Sheet (yyyy-MM)
+    var now = new Date();
+    var sheet = getMonthlySheet(ss, now);
     
     var logRow = [
-      new Date(),
+      now,
       payloadData.tk_sm,
       payloadData.tk_lg,
       payloadData.flow,
@@ -449,12 +503,12 @@ function doPost(e) {
     sheet.appendRow(logRow);
     
     try {
-      scanForActiveAlarms(payloadData);
+      scanForActiveAlarms(ss, sheet, logRow);
     } catch(err) {
       Logger.log("Alarm notifier error: " + err.toString());
     }
     
-    return ContentService.createTextOutput(JSON.stringify({"status": "success", "row": sheet.getLastRow()}))
+    return ContentService.createTextOutput(JSON.stringify({"status": "success", "sheet": sheet.getName(), "row": sheet.getLastRow()}))
                          .setMimeType(ContentService.MimeType.JSON);
                          
   } catch(error) {
@@ -469,13 +523,10 @@ function doPost(e) {
 // ==========================================
 // 2. ACTIVE SYSTEM ALARM THREAD ENGINE
 // ==========================================
-function scanForActiveAlarms(payloadData) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName("Sheet1");
-  var lastRow = sheet.getLastRow();
-  
-  if (lastRow < 2) return; 
-  
+function scanForActiveAlarms(ss, sheet, logRow) {
+  ss = ss || SpreadsheetApp.getActiveSpreadsheet();
+  sheet = sheet || getMonthlySheet(ss);
+
   var recipientSheet = ss.getSheetByName("Recipients");
   var notifyTargets = "";
   
@@ -507,21 +558,31 @@ function scanForActiveAlarms(payloadData) {
   
   if (!notifyTargets) return;
 
-  var lastAlarmCell = sheet.getRange(lastRow, 12); 
-  var alarmStatus = lastAlarmCell.getValue();
-  var currentNote = lastAlarmCell.getNote();
-  
-  var previousAlarmCell = sheet.getRange(lastRow - 1, 12);
-  var previousNote = previousAlarmCell.getNote();
-  
-  var timestamp = sheet.getRange(lastRow, 1).getValue();  
-  var tk_sm     = sheet.getRange(lastRow, 2).getValue();  
-  var tk_lg     = sheet.getRange(lastRow, 3).getValue();  
-  var flow      = sheet.getRange(lastRow, 4).getValue();  
-  
+  var timestamp, tk_sm, tk_lg, flow, alarmStatus;
+  if (logRow) {
+    timestamp   = logRow[0];
+    tk_sm       = logRow[1];
+    tk_lg       = logRow[2];
+    flow        = logRow[3];
+    alarmStatus = logRow[11];
+  } else {
+    var lastRow = sheet.getLastRow();
+    if (lastRow < 2) return;
+    var rowVals = sheet.getRange(lastRow, 1, 1, 12).getValues()[0];
+    timestamp   = rowVals[0];
+    tk_sm       = rowVals[1];
+    tk_lg       = rowVals[2];
+    flow        = rowVals[3];
+    alarmStatus = rowVals[11];
+  }
+
+  // Track notification state in ScriptProperties so month rollovers never lose alarm state
+  var isAlarmNotified = (scriptProps.getProperty("EMAIL_ALARM_NOTIFIED") === "true");
+  var isTripped = (alarmStatus === 1 || alarmStatus === "1" || alarmStatus === "TRIPPED");
+  var isClear   = (alarmStatus === 0 || alarmStatus === "0" || alarmStatus === "CLEAR");
   var formattedTime = Utilities.formatDate(new Date(timestamp), Session.getScriptTimeZone(), "MM/dd HH:mm:ss");
 
-  if ((alarmStatus === 1 || alarmStatus === "1" || alarmStatus === "TRIPPED") && currentNote !== "NOTIFIED") {
+  if (isTripped && !isAlarmNotified) {
     var emailSubject = "⚠️ CVEWS ALARM!";
     var emailBody = "🚨 SYSTEM TRIPPED!\n" +
                     "Time: " + formattedTime + "\n" +
@@ -532,12 +593,12 @@ function scanForActiveAlarms(payloadData) {
                     
     try {
       MailApp.sendEmail(notifyTargets, emailSubject, emailBody);
-      lastAlarmCell.setNote("NOTIFIED");
+      scriptProps.setProperty("EMAIL_ALARM_NOTIFIED", "true");
     } catch(e) {
       Logger.log("Email dispatch failed: " + e.toString());
     }
   }
-  else if ((alarmStatus === 0 || alarmStatus === "0" || alarmStatus === "CLEAR") && previousNote === "NOTIFIED") {
+  else if (isClear && isAlarmNotified) {
     var clearSubject = "✅ CVEWS RESOLVED";
     var clearBody = "💚 SYSTEM CLEAR / BACK TO NORMAL\n" +
                     "Cleared At: " + formattedTime + "\n\n" +
@@ -548,7 +609,7 @@ function scanForActiveAlarms(payloadData) {
                     
     try {
       MailApp.sendEmail(notifyTargets, clearSubject, clearBody);
-      previousAlarmCell.clearNote();
+      scriptProps.deleteProperty("EMAIL_ALARM_NOTIFIED");
     } catch(e) {
       Logger.log("Email dispatch failed: " + e.toString());
     }
@@ -556,44 +617,9 @@ function scanForActiveAlarms(payloadData) {
 }
 
 // ==========================================
-// 3. TOTALIZER INTEGRATION CODE ENGINE
+// 3. CUSTOM VOLUMETRIC YIELD REPORT ENGINE
 // ==========================================
-function getGallonsPumpedOverHours(hours) {
-  var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName("Sheet1");
-  var lastRow = sheet.getLastRow();
-  if (lastRow < 2) return 0;
-
-  var now = new Date();
-  var cutoffTime = new Date(now.getTime() - (hours * 60 * 60 * 1000));
-  
-  var maxRowsToRead = Math.min(lastRow - 1, hours * 130); 
-  var startRow = lastRow - maxRowsToRead + 1;
-  
-  var timestamps = sheet.getRange(startRow, 1, maxRowsToRead, 1).getValues();
-  var flowRates = sheet.getRange(startRow, 4, maxRowsToRead, 1).getValues();
-  
-  var totalGallons = 0;
-
-  for (var i = timestamps.length - 1; i >= 0; i--) {
-    var rowTime = new Date(timestamps[i][0]);
-    if (rowTime >= cutoffTime) {
-      var gpm = parseFloat(flowRates[i][0]) || 0;
-      totalGallons += (gpm * 0.5); 
-    } else {
-      break; 
-    }
-  }
-  return Math.round(totalGallons);
-}
-
-// Custom Volumetric Yield Report Generator (Minute / Hourly / Daily)
-function generateVolumetricYieldReport(sheet, startIso, endIso, resolution) {
-  var lastRow = sheet.getLastRow();
-  if (lastRow < 2) {
-    return { total_gallons: 0, rows: [] };
-  }
-
+function generateVolumetricYieldReport(ss, startIso, endIso, resolution) {
   var startDate = new Date(startIso);
   var endDate = new Date(endIso);
   if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
@@ -608,35 +634,46 @@ function generateVolumetricYieldReport(sheet, startIso, endIso, resolution) {
     formatPattern = "MM/dd/yyyy";
   }
 
-  var numRows = lastRow - 1;
-  var timestamps = sheet.getRange(2, 1, numRows, 1).getValues();
-  var flowRates  = sheet.getRange(2, 4, numRows, 1).getValues();
-
   var buckets = {};
   var bucketOrder = [];
   var grandTotalGallons = 0;
 
-  for (var i = 0; i < numRows; i++) {
-    var rowTime = new Date(timestamps[i][0]);
-    if (rowTime >= startDate && rowTime <= endDate) {
-      var gpm = parseFloat(flowRates[i][0]) || 0;
-      var gallons = gpm * 0.5;
-      grandTotalGallons += gallons;
+  // Iterate month-by-month across only the relevant monthly sheets
+  var cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
+  var endMonth = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
 
-      var bucketKey = Utilities.formatDate(rowTime, tz, formatPattern);
-      if (!buckets[bucketKey]) {
-        buckets[bucketKey] = {
-          period: bucketKey,
-          gallons: 0,
-          gpmSum: 0,
-          count: 0
-        };
-        bucketOrder.push(bucketKey);
+  while (cursor <= endMonth) {
+    var sheetName = Utilities.formatDate(cursor, tz, "yyyy-MM");
+    var sheet = ss.getSheetByName(sheetName);
+
+    if (sheet && sheet.getLastRow() >= 2) {
+      var numRows = sheet.getLastRow() - 1;
+      var values = sheet.getRange(2, 1, numRows, 4).getValues();
+
+      for (var i = 0; i < numRows; i++) {
+        var rowTime = new Date(values[i][0]);
+        if (rowTime >= startDate && rowTime <= endDate) {
+          var gpm = parseFloat(values[i][3]) || 0;
+          var gallons = gpm * 0.5;
+          grandTotalGallons += gallons;
+
+          var bucketKey = Utilities.formatDate(rowTime, tz, formatPattern);
+          if (!buckets[bucketKey]) {
+            buckets[bucketKey] = {
+              period: bucketKey,
+              gallons: 0,
+              gpmSum: 0,
+              count: 0
+            };
+            bucketOrder.push(bucketKey);
+          }
+          buckets[bucketKey].gallons += gallons;
+          buckets[bucketKey].gpmSum += gpm;
+          buckets[bucketKey].count += 1;
+        }
       }
-      buckets[bucketKey].gallons += gallons;
-      buckets[bucketKey].gpmSum += gpm;
-      buckets[bucketKey].count += 1;
     }
+    cursor.setMonth(cursor.getMonth() + 1);
   }
 
   var rows = bucketOrder.map(function(key) {
@@ -691,13 +728,10 @@ function doGet(e) {
     }
   }
 
-  var sheet = ss.getSheetByName("Sheet1");
-  var lastRow = sheet.getLastRow();
-
   // Handle Custom Volumetric Yield Report Query
   if (e && e.parameter && e.parameter.type === "yield_report") {
     var reportResult = generateVolumetricYieldReport(
-      sheet,
+      ss,
       e.parameter.start,
       e.parameter.end,
       e.parameter.resolution || "hourly"
@@ -708,21 +742,24 @@ function doGet(e) {
   
   var isRawRequested = (e && e.parameter && (e.parameter.type === "flow" || e.parameter.type === "raw" || e.parameter.format === "raw"));
 
-  if (lastRow < 2) {
+  // Fetch up to 50,000 recent rows across current and previous monthly tabs in a single pass
+  var dataRange = getRecentTelemetryRows(ss, 50000);
+
+  if (dataRange.length === 0) {
     if (isRawRequested) {
       return ContentService.createTextOutput(JSON.stringify([])).setMimeType(ContentService.MimeType.JSON);
     }
     return ContentService.createTextOutput(JSON.stringify({ error: "No data available" })).setMimeType(ContentService.MimeType.JSON);
   }
 
-  var now = new Date();
-  var cutoffTime24h = new Date(now.getTime() - (24 * 60 * 60 * 1000));
-  var cutoffTime30d = new Date(now.getTime() - (30 * 24 * 60 * 60 * 1000));
-  
-  var maxRowsToRead = Math.min(lastRow - 1, 50000); 
-  var startRow = lastRow - maxRowsToRead + 1;
-  var dataRange = sheet.getRange(startRow, 1, maxRowsToRead, 19).getValues();
+  var nowMs = Date.now();
+  var cutoff1h  = nowMs - (1 * 60 * 60 * 1000);
+  var cutoff6h  = nowMs - (6 * 60 * 60 * 1000);
+  var cutoff12h = nowMs - (12 * 60 * 60 * 1000);
+  var cutoff24h = nowMs - (24 * 60 * 60 * 1000);
+  var cutoff30d = nowMs - (30 * 24 * 60 * 60 * 1000);
 
+  var pumped1h = 0, pumped6h = 0, pumped12h = 0, pumped24h = 0;
   var w1Mins = 0, w3Mins = 0, w4Mins = 0, w5Mins = 0, p1Mins = 0, p2Mins = 0;
   var smallTankValues = [];
   var largeTankValues = [];
@@ -739,20 +776,10 @@ function doGet(e) {
   var ltLoTrips = 0, inLtLo = false;
 
   for (var i = 0; i < dataRange.length; i++) {
-    var rawDate = dataRange[i][0];
-    var rowTime = new Date(rawDate);
+    var rowTime = new Date(dataRange[i][0]);
+    var rowMs = rowTime.getTime();
     
-    if (rowTime >= cutoffTime24h) {
-      var gpmFlow = parseFloat(dataRange[i][3]) || 0;
-      var m3hFlow = (gpmFlow * 60.0) / M3_TO_GALLONS;
-
-      rawHistoricalLogs.push({
-        timestamp: rowTime.toISOString(),
-        flow_rate: m3hFlow
-      });
-    }
-
-    if (rowTime >= cutoffTime30d) {
+    if (rowMs >= cutoff30d) {
       var almStatus = dataRange[i][11];
       var isRowTripped = (almStatus === 1 || almStatus === "1" || almStatus === true || almStatus === "TRIPPED");
       if (isRowTripped) {
@@ -778,7 +805,21 @@ function doGet(e) {
       } else { inLtLo = false; }
     }
 
-    if (rowTime >= cutoffTime24h) {
+    if (rowMs >= cutoff24h) {
+      var gpmFlow = parseFloat(dataRange[i][3]) || 0;
+      var m3hFlow = (gpmFlow * 60.0) / M3_TO_GALLONS;
+      var rowGallons = gpmFlow * 0.5;
+
+      rawHistoricalLogs.push({
+        timestamp: rowTime.toISOString(),
+        flow_rate: m3hFlow
+      });
+
+      pumped24h += rowGallons;
+      if (rowMs >= cutoff12h) pumped12h += rowGallons;
+      if (rowMs >= cutoff6h)  pumped6h  += rowGallons;
+      if (rowMs >= cutoff1h)  pumped1h  += rowGallons;
+
       if (dataRange[i][5] === 1)  w1Mins += 0.5;
       if (dataRange[i][6] === 1)  w3Mins += 0.5;
       if (dataRange[i][7] === 1)  w4Mins += 0.5;
@@ -838,10 +879,10 @@ function doGet(e) {
     "ut_lo":     latestRow[16] ? 1 : 0,
     "lt_hi":     latestRow[17] ? 1 : 0,
     "lt_lo":     latestRow[18] ? 1 : 0,
-    "pumped_1h":  getGallonsPumpedOverHours(1),
-    "pumped_6h":  getGallonsPumpedOverHours(6),
-    "pumped_12h": getGallonsPumpedOverHours(12),
-    "pumped_24h": getGallonsPumpedOverHours(24),
+    "pumped_1h":  Math.round(pumped1h),
+    "pumped_6h":  Math.round(pumped6h),
+    "pumped_12h": Math.round(pumped12h),
+    "pumped_24h": Math.round(pumped24h),
     "w1_24h": (w1Mins / 60).toFixed(1),
     "w3_24h": (w3Mins / 60).toFixed(1),
     "w4_24h": (w4Mins / 60).toFixed(1),
@@ -871,16 +912,11 @@ function doGet(e) {
 // ==========================================
 function compileDailyReportData() {
   var ss = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName("Sheet1");
-  var lastRow = sheet.getLastRow();
-  if (lastRow < 2) return;
+  var dataRange = getRecentTelemetryRows(ss, 3000);
+  if (dataRange.length === 0) return;
 
   var now = new Date();
   var cutoffTime = new Date(now.getTime() - (24 * 60 * 60 * 1000));
-  
-  var maxRowsToRead = Math.min(lastRow - 1, 3000); 
-  var startRow = lastRow - maxRowsToRead + 1;
-  var dataRange = sheet.getRange(startRow, 1, maxRowsToRead, 19).getValues();
   
   var totalGallons = 0;
   var minutesW1 = 0, minutesW3 = 0, minutesW4 = 0, minutesW5 = 0;
@@ -969,4 +1005,83 @@ function dispatchDailyReportEmail() {
   MailApp.sendEmail(notifyTargets, subject, body);
   cacheSheet.clear();
 }
-```[cite: 4]
+
+// ==========================================
+// 6. MONTHLY SHEET ARCHIVAL & TRIGGER SETUP
+// ==========================================
+
+// Run this ONCE manually from the Apps Script editor to install the monthly trigger
+function setupMonthlyArchiveTrigger() {
+  var triggers = ScriptApp.getProjectTriggers();
+  for (var i = 0; i < triggers.length; i++) {
+    if (triggers[i].getHandlerFunction() === "archivePreviousMonthSheet") {
+      ScriptApp.deleteTrigger(triggers[i]);
+    }
+  }
+
+  // Runs on the 1st of every month at 2:00 AM
+  ScriptApp.newTrigger("archivePreviousMonthSheet")
+    .timeBased()
+    .onMonthDay(1)
+    .atHour(2)
+    .create();
+
+  Logger.log("Monthly archival trigger installed: archivePreviousMonthSheet will run on day 1 at 2:00 AM.");
+}
+
+// Exports the previous month's tab (yyyy-MM) to a standalone archive file in Drive,
+// then removes that tab from the active workbook to prevent cell-limit bloat.
+function archivePreviousMonthSheet() {
+  var mLock = LockService.getScriptLock();
+  try {
+    mLock.waitLock(30000);
+
+    var ss = SpreadsheetApp.getActiveSpreadsheet();
+    var tz = Session.getScriptTimeZone();
+    var now = new Date();
+
+    // Ensure current month's sheet exists before deleting any old sheet
+    getMonthlySheet(ss, now);
+
+    // Target the previous month (e.g., if today is Dec 1, targets "2026-11")
+    var prevMonthDate = new Date(now.getFullYear(), now.getMonth() - 1, 15);
+    var prevSheetName = Utilities.formatDate(prevMonthDate, tz, "yyyy-MM");
+    var prevSheet = ss.getSheetByName(prevSheetName);
+
+    if (!prevSheet) {
+      Logger.log("No sheet found for previous month (" + prevSheetName + "). Nothing to archive.");
+      return;
+    }
+
+    // Locate or create the archive folder in Google Drive
+    var folders = DriveApp.getFoldersByName(ARCHIVE_FOLDER_NAME);
+    var archiveFolder = folders.hasNext() ? folders.next() : DriveApp.createFolder(ARCHIVE_FOLDER_NAME);
+
+    // Create standalone archive spreadsheet and copy the month's sheet into it
+    var archiveFileName = "CVEWS_Telemetry_" + prevSheetName;
+    var archiveSs = SpreadsheetApp.create(archiveFileName);
+    var copiedSheet = prevSheet.copyTo(archiveSs);
+    copiedSheet.setName(prevSheetName);
+
+    // Remove the default blank "Sheet1" from the new archive spreadsheet
+    var defaultSheet = archiveSs.getSheetByName("Sheet1");
+    if (defaultSheet && archiveSs.getSheets().length > 1) {
+      archiveSs.deleteSheet(defaultSheet);
+    }
+
+    // Move archive spreadsheet into the dedicated Drive folder
+    var archiveFile = DriveApp.getFileById(archiveSs.getId());
+    archiveFile.moveTo(archiveFolder);
+
+    // Delete the archived sheet from the live logger workbook (only if > 1 sheet remains)
+    if (ss.getSheets().length > 1) {
+      ss.deleteSheet(prevSheet);
+    }
+
+    Logger.log("Successfully archived and removed sheet: " + prevSheetName + " -> " + archiveFileName);
+  } catch (err) {
+    Logger.log("Monthly archival error: " + err.toString());
+  } finally {
+    mLock.releaseLock();
+  }
+}
