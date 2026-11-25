@@ -6,8 +6,8 @@ var scriptProps = PropertiesService.getScriptProperties();
 var TWILIO_ACCOUNT_SID = scriptProps.getProperty("TWILIO_ACCOUNT_SID");
 var TWILIO_AUTH_TOKEN  = scriptProps.getProperty("TWILIO_AUTH_TOKEN");
 var TWILIO_FROM_NUMBER = scriptProps.getProperty("TWILIO_FROM_NUMBER");
-var ALARM_ACK_PIN      = scriptProps.getProperty("ALARM_ACK_PIN") || "3141";
-var SECRET_DASH_PASS   = scriptProps.getProperty("SECRET_DASH_PASS") || "hti123";
+var ALARM_ACK_PIN      = scriptProps.getProperty("ALARM_ACK_PIN");
+var SECRET_DASH_PASS   = scriptProps.getProperty("SECRET_DASH_PASS");
 
 var M3_TO_GALLONS = 264.172;
 var SNOOZE_DURATION_MINUTES = 30;
@@ -638,13 +638,29 @@ function generateVolumetricYieldReport(ss, startIso, endIso, resolution) {
   var bucketOrder = [];
   var grandTotalGallons = 0;
 
-  // Iterate month-by-month across only the relevant monthly sheets
+  // Iterate month-by-month across active sheets, falling back to Google Drive archives
   var cursor = new Date(startDate.getFullYear(), startDate.getMonth(), 1);
   var endMonth = new Date(endDate.getFullYear(), endDate.getMonth(), 1);
+  var archiveFolder = null;
 
   while (cursor <= endMonth) {
     var sheetName = Utilities.formatDate(cursor, tz, "yyyy-MM");
     var sheet = ss.getSheetByName(sheetName);
+
+    // If not in the live workbook, check the Drive archive folder
+    if (!sheet) {
+      if (!archiveFolder) {
+        var folders = DriveApp.getFoldersByName(ARCHIVE_FOLDER_NAME);
+        if (folders.hasNext()) archiveFolder = folders.next();
+      }
+      if (archiveFolder) {
+        var files = archiveFolder.getFilesByName("CVEWS_Telemetry_" + sheetName);
+        if (files.hasNext()) {
+          var archivedSs = SpreadsheetApp.open(files.next());
+          sheet = archivedSs.getSheetByName(sheetName);
+        }
+      }
+    }
 
     if (sheet && sheet.getLastRow() >= 2) {
       var numRows = sheet.getLastRow() - 1;
